@@ -484,8 +484,10 @@ class LoginActivity : Activity() {
 
     /**
      * After the browser approves the code the person still does not know WHICH account the server now spends quota
-     * from - the previous one could silently stay active. The connection label (the email) is fetched and shown, so
-     * the mismatch "created a new account, quota still gone" is visible immediately instead of a mystery.
+     * from - the previous one could silently stay active. The connection label is fetched and shown, and the honest
+     * failure matters just as much: when the server reports no connection (the approval never completed server-side,
+     * or the page was for a different client), saying "signed in" anyway sends the person hunting for an account the
+     * app does not have. Connections read newest first, so the first one is the active account.
      */
     private fun reportConnectedAccount() {
         val s = ServerState.snapshot
@@ -496,13 +498,42 @@ class LoginActivity : Activity() {
 
         Thread({
             runCatching {
-                Thread.sleep(1500)
+                // A moment of patience: the completion lands right when the poll reports it, but the server may
+                // still be mid-write. Three tries, then the plain answer instead of silence.
+                repeat(3) { n ->
+                    Thread.sleep(1500)
 
-                val label = ConsoleLogin(HttpTransport(s.baseUrl, pwd)).signedInAccounts().lastOrNull()?.label
-                    ?: return@runCatching
+                    val snap = ServerState.snapshot
 
-                runOnUiThread {
-                    Ui.toast(applicationContext, tr("Теперь активен аккаунт: ", "The active account is now: ") + label)
+                    if (snap.phase != Phase.RUNNING) return@runCatching
+
+                    val accounts = runCatching {
+                        ConsoleLogin(HttpTransport(snap.baseUrl, pwd)).signedInAccounts()
+                    }.getOrElse { return@runCatching }
+
+                    if (accounts.isNotEmpty()) {
+                        val label = accounts.first().label
+
+                        app.profiles.setAccount(snap.profileId, label)
+                        app.syncAccountAsync()
+                        runOnUiThread {
+                            Ui.toast(applicationContext, tr("Теперь активен аккаунт: ", "The active account is now: ") + label)
+                        }
+
+                        return@runCatching
+                    }
+
+                    if (n == 2) {
+                        runOnUiThread {
+                            Ui.toast(
+                                applicationContext,
+                                tr(
+                                    "Сервер не видит подключённый аккаунт - квота осталась анонимной. Нажмите «Подключить аккаунт» в чате и войдите ещё раз.",
+                                    "The server sees no connected account - the quota is still anonymous. Tap \"Connect account\" in the chat and sign in again.",
+                                ),
+                            )
+                        }
+                    }
                 }
             }
         }, "login-report").apply { isDaemon = true; start() }

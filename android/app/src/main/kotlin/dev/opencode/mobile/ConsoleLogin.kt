@@ -110,8 +110,8 @@ object LoginFault {
                 "The server did not report a sign-in method. Restart the server in settings and try again.",
             )
             "integration" in text -> tr(
-                "Сервер ответил нестандартно на запрос входа. Попробуйте ещё раз или перезапустите сервер.",
-                "The server replied unexpectedly to the sign-in request. Try again or restart the server.",
+                "Сервер ещё не объявил вход в аккаунт: он появляется через некоторое время после запуска сервера. Подождите минуту и попробуйте снова.",
+                "The server has not reported the account sign-in yet: it appears a while after the server starts. Wait a minute and try again.",
             )
             else -> message
         }
@@ -122,11 +122,15 @@ object LoginFault {
  * Starts and follows the OpenCode Console sign-in (the account behind Zen and Go) using the same server API the web
  * UI uses. The page that gets opened lets the person pick Google or GitHub, and Google shows its account chooser.
  */
-class ConsoleLogin(private val transport: Transport, private val integration: String = "opencode") {
+class ConsoleLogin(
+    private val transport: Transport,
+    private val integration: String = "opencode",
+    /** How patiently the integration lookup waits for the server's plugin activation; see [info]. */
+    private val warmupAttempts: Int = ATTEMPTS,
+) {
     fun start(): LoginAttempt {
-        val info = get("/api/integration/$integration")
-        val data = (info["data"] as? Map<*, *>) ?: throw LoginException("Unexpected integration reply")
-        val methods = data["methods"] as? List<*> ?: emptyList<Any?>()
+        val info = info() ?: throw LoginException("Integration not found: $integration")
+        val methods = info["methods"] as? List<*> ?: emptyList<Any?>()
         val oauth = methods.firstNotNullOfOrNull { (it as? Map<*, *>)?.takeIf { m -> m["type"] == "oauth" } }
         val methodId = oauth?.get("id") as? String ?: throw LoginException("The server has no account sign-in method")
 
@@ -165,8 +169,7 @@ class ConsoleLogin(private val transport: Transport, private val integration: St
 
     /** The accounts stored for this integration, newest connection last. Empty when nobody has signed in. */
     fun accounts(): List<ConsoleAccount> {
-        val data = get("/api/integration/$integration")["data"] as? Map<*, *> ?: return emptyList()
-        val connections = data["connections"] as? List<*> ?: return emptyList()
+        val connections = info()?.get("connections") as? List<*> ?: return emptyList()
 
         return connections.mapNotNull {
             val c = it as? Map<*, *> ?: return@mapNotNull null
@@ -180,12 +183,42 @@ class ConsoleLogin(private val transport: Transport, private val integration: St
     /** Only accounts that came from the Console sign-in, as opposed to a pasted API key. */
     fun signedInAccounts(): List<ConsoleAccount> = accounts().filter { it.method == "oauth" }
 
-    private fun get(path: String): Map<String, Any?> {
-        val reply = transport.request("GET", path)
+    /**
+     * The integration as the server's registry knows it, or null when there is none.
+     *
+     * The registry is filled by a built-in plugin that activates asynchronously after the server comes up, and on a
+     * phone that easily takes half a minute. Of the two endpoints the list endpoint waits for that activation, while
+     * the one-integration endpoint does not and answers 404 "Integration not found" on a cold server - which used to
+     * break the sign-in and the account sync on every launch, so every request went out anonymous and hit the shared
+     * per-IP free limit. The lookup therefore goes through the list and finds the integration in it, re-requesting
+     * while the server is still warming up.
+     */
+    fun info(): Map<*, *>? {
+        repeat(warmupAttempts) { n ->
+            if (n > 0) Thread.sleep(PAUSE_MS)
 
-        if (reply.code !in 200..299) throw LoginException(failure(reply))
+            try {
+                val reply = transport.request("GET", "/api/integration")
 
-        return MiniJson.obj(reply.body) ?: throw LoginException("The server sent an unreadable reply")
+                when {
+                    reply.code in 200..299 -> {
+                        val data = MiniJson.obj(reply.body)?.get("data") as? List<*>
+
+                        // Activation has completed, so a missing entry is a fact now, not a race: a server build
+                        // without this integration will not grow one by waiting.
+                        return data?.firstOrNull { (it as? Map<*, *>)?.get("id") == integration } as? Map<*, *>
+                    }
+                    // A wrong password or a server without the endpoint will not fix itself either.
+                    reply.code == 401 || reply.code == 403 || reply.code == 404 -> return null
+                }
+            } catch (e: InterruptedException) {
+                throw e
+            } catch (_: Exception) {
+                // A timeout or a dropped socket: most often the activation is still running. Fall through to a retry.
+            }
+        }
+
+        return null
     }
 
     private fun failure(reply: Reply): String {
@@ -195,6 +228,12 @@ class ConsoleLogin(private val transport: Transport, private val integration: St
     }
 
     companion object {
+        /** Integration lookups before giving up; each attempt waits out the transport timeout when activation runs. */
+        const val ATTEMPTS = 10
+
+        /** A pause between the lookup attempts, so a warming-up server is not hammered. Tests shrink it. */
+        var PAUSE_MS = 2_500L
+
         /** The verification page carries the code as `user_code`, which is what the person must recognise. */
         fun code(url: String): String? {
             val query = runCatching { URI(url).rawQuery }.getOrNull() ?: return null

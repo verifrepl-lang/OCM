@@ -259,6 +259,11 @@
   // and offers the app's own sign-in. The scan skips the hint itself, so the hint can never feed back into it.
   // The English wording mirrors Limits.kt and the texts OpenCode Zen actually sends: "Rate limit exceeded.",
   // "Free usage exceeded, subscribe to Go", "FreeUsageLimitError" and the per-IP anonymous rejection.
+  //
+  // The single most misunderstood thing about the free limit: linking Google on the opencode.ai website does NOT
+  // connect an account to this app - only the in-app sign-in does, because the local server keeps the credential.
+  // The hints say so explicitly, and a small chip (data-oc-account) shows the connected account once per page load,
+  // so the state is visible instead of inferred from whether an offer keeps coming back.
   var QUOTA = /(rate[\s_-]?limit(?:ed)?|too\s+many\s+requests|(?:status|code|http)\s*:?\s*429\b|insufficient[_ ]?quota|quota\s*(?:exceeded|exhausted|has been exceeded|will run out|is exhausted)|exceeded\s+your\s+current\s+quota|exceeded\s*(?:your|the|its)?\s*(?:usage|quota|free)|plan\s+and\s+billing|(?:free|usage|request)\s*(?:quota|limit)|usage[\s_-]?limit|free[\s_-]?(?:usage|tier)|gousagelimit|creditlimit|(?:credit|credits?|tokens?)\s*(?:exhausted|used up)|(?:^|[^\u0400-\u04ff])\u043a\u0432\u043e\u0442[\u0400-\u04ff]*\s*(?:\u0438\u0441\u0447\u0435\u0440\u043f\u0430\u043d[\u0400-\u04ff]*|\u043f\u0440\u0435\u0432\u044b\u0448\u0435\u043d[\u0400-\u04ff]*|\u0437\u0430\u043a\u043e\u043d\u0447\u0438\u043b[\u0400-\u04ff]*)|(?:^|[^\u0400-\u04ff])\u043b\u0438\u043c\u0438\u0442[\u0400-\u04ff]*\s*(?:\u0438\u0441\u0447\u0435\u0440\u043f\u0430\u043d[\u0400-\u04ff]*|\u043f\u0440\u0435\u0432\u044b\u0448\u0435\u043d[\u0400-\u04ff]*|\u0437\u0430\u043a\u043e\u043d\u0447\u0438\u043b[\u0400-\u04ff]*)|(?:\u0438\u0441\u0447\u0435\u0440\u043f\u0430\u043d[\u0400-\u04ff]*|\u0437\u0430\u043a\u043e\u043d\u0447\u0438\u043b[\u0400-\u04ff]*)\s*(?:\u043b\u0438\u043c\u0438\u0442[\u0400-\u04ff]*|\u043a\u0432\u043e\u0442[\u0400-\u04ff]*))/i;
   var quotaHandled = new WeakSet();
 
@@ -269,6 +274,16 @@
       return !!(native.hasAccount && native.hasAccount());
     } catch (e) {
       return false;
+    }
+  }
+
+  // The email the active profile is signed in with, as the native side knows it. Empty when there is none (or the
+  // app build predates the method), so every caller must treat it as decorative, never as a gate.
+  function accountLabel() {
+    try {
+      return String((native.accountLabel && native.accountLabel()) || "");
+    } catch (e) {
+      return "";
     }
   }
 
@@ -324,11 +339,11 @@
       "font-size:13px;line-height:1.4";
     text.textContent = signed
       ? (isRussian
-          ? "\u042d\u0442\u043e \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435 \u0441\u0435\u0440\u0432\u0435\u0440\u0430, \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435 \u0435\u0433\u043e \u043d\u0435 \u043c\u0435\u043d\u044f\u0435\u0442. \u0423 \u0432\u0430\u0448\u0435\u0433\u043e \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0430 \u0441\u0432\u043e\u0439 \u043b\u0438\u0447\u043d\u044b\u0439 \u043b\u0438\u043c\u0438\u0442, \u0438 \u043e\u043d \u0438\u0441\u0447\u0435\u0440\u043f\u0430\u043d - \u043f\u043e\u0434\u043e\u0436\u0434\u0438\u0442\u0435 \u0441\u0431\u0440\u043e\u0441\u0430 \u0438\u043b\u0438 \u0432\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0434\u0440\u0443\u0433\u0443\u044e \u043c\u043e\u0434\u0435\u043b\u044c."
-          : "This is the server's own message; the app does not change it. Your account has a limit of its own and it is spent - wait for the reset or pick another model.")
+          ? "\u042d\u0442\u043e \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435 \u0441\u0435\u0440\u0432\u0435\u0440\u0430, \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435 \u0435\u0433\u043e \u043d\u0435 \u043c\u0435\u043d\u044f\u0435\u0442. \u0423 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0451\u043d\u043d\u043e\u0433\u043e \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0430 \u043b\u0438\u043c\u0438\u0442 \u043b\u0438\u0447\u043d\u044b\u0439: \u043f\u043e\u0434\u043e\u0436\u0434\u0438\u0442\u0435 \u0441\u0431\u0440\u043e\u0441\u0430, \u0432\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0434\u0440\u0443\u0433\u0443\u044e \u043c\u043e\u0434\u0435\u043b\u044c \u0438\u043b\u0438 \u043e\u0444\u043e\u0440\u043c\u0438\u0442\u0435 OpenCode Go (opencode.ai/go)."
+          : "This is the server's own message; the app does not change it. A connected account has a limit of its own: wait for the reset, pick another model, or subscribe to OpenCode Go (opencode.ai/go).")
       : (isRussian
-          ? "\u042d\u0442\u043e \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435 \u0441\u0435\u0440\u0432\u0435\u0440\u0430, \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435 \u0435\u0433\u043e \u043d\u0435 \u043c\u0435\u043d\u044f\u0435\u0442. \u0415\u0441\u043b\u0438 \u044d\u0442\u043e \u043b\u0438\u043c\u0438\u0442 \u0431\u0435\u0441\u043f\u043b\u0430\u0442\u043d\u044b\u0445 \u043c\u043e\u0434\u0435\u043b\u0435\u0439: \u0431\u0435\u0437 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0430 \u043e\u043d \u043e\u0431\u0449\u0438\u0439 \u0434\u043b\u044f \u0432\u0441\u0435\u0445, \u043a\u0442\u043e \u0441\u0438\u0434\u0438\u0442 \u0441 \u0432\u0430\u0448\u0438\u043c IP-\u0430\u0434\u0440\u0435\u0441\u043e\u043c, \u0441 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u043e\u043c - \u0432\u0430\u0448 \u043b\u0438\u0447\u043d\u044b\u0439. \u041f\u043e\u0434\u043e\u0436\u0434\u0438\u0442\u0435 \u0441\u0431\u0440\u043e\u0441\u0430, \u0432\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043c\u043e\u0434\u0435\u043b\u044c \u0441\u043e \u0441\u0432\u043e\u0438\u043c \u043a\u043b\u044e\u0447\u043e\u043c \u0438\u043b\u0438 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u0435 \u0430\u043a\u043a\u0430\u0443\u043d\u0442."
-          : "This is the server's own message; the app does not change it. If it is the free-model limit: without an account it is shared by everyone behind your IP address, with an account it is your own. Wait for the reset, pick a model with your own key, or connect an account.");
+          ? "\u042d\u0442\u043e \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435 \u0441\u0435\u0440\u0432\u0435\u0440\u0430, \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435 \u0435\u0433\u043e \u043d\u0435 \u043c\u0435\u043d\u044f\u0435\u0442. \u0411\u0435\u0437 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0430 \u043b\u0438\u043c\u0438\u0442 \u0431\u0435\u0441\u043f\u043b\u0430\u0442\u043d\u044b\u0445 \u043c\u043e\u0434\u0435\u043b\u0435\u0439 \u043e\u0431\u0449\u0438\u0439 \u043d\u0430 \u0432\u0435\u0441\u044c \u0432\u0430\u0448 IP-\u0430\u0434\u0440\u0435\u0441, \u0441 \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u043e\u043c - \u043b\u0438\u0447\u043d\u044b\u0439. \u0412\u0445\u043e\u0434 \u0447\u0435\u0440\u0435\u0437 Google \u043d\u0430 \u0441\u0430\u0439\u0442\u0435 \u043d\u0435 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0430\u0435\u0442 \u0430\u043a\u043a\u0430\u0443\u043d\u0442 \u043a \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u044e: \u043d\u0430\u0436\u043c\u0438\u0442\u0435 \u00ab\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u00bb \u0438 \u0432\u043e\u0439\u0434\u0438\u0442\u0435 \u0437\u0434\u0435\u0441\u044c. \u041c\u043e\u0436\u043d\u043e \u0442\u0430\u043a\u0436\u0435 \u043f\u043e\u0434\u043e\u0436\u0434\u0430\u0442\u044c \u0441\u0431\u0440\u043e\u0441\u0430, \u0432\u044b\u0431\u0440\u0430\u0442\u044c \u043c\u043e\u0434\u0435\u043b\u044c \u0441\u043e \u0441\u0432\u043e\u0438\u043c \u043a\u043b\u044e\u0447\u043e\u043c \u0438\u043b\u0438 \u043e\u0444\u043e\u0440\u043c\u0438\u0442\u044c OpenCode Go."
+          : "This is the server's own message; the app does not change it. Without an account the free-model limit is shared across your IP address; with one it is personal. Signing in with Google on the website does not connect the account to the app: tap \"Connect account\" and sign in here. You can also wait for the reset, pick a model with your own key, or subscribe to OpenCode Go.");
     box.appendChild(text);
 
     // A profile with a connected account has a personal quota: offering the sign-in again would only confuse.
@@ -394,6 +409,50 @@
       }
     } catch (e) {}
   }
+
+  // The page itself never says which account (if any) the server spends quota from, and the mistake of linking
+  // Google only on the website looks exactly like a working sign-in until a limit error explains otherwise. Show
+  // the connected account once per page load, for a few seconds, with the email the app knows.
+  function showAccountChip() {
+    if (document.querySelector("[data-oc-account]")) return;
+
+    var label = accountLabel();
+
+    if (!label) return;
+
+    var isRussian = (document.documentElement.lang || navigator.language || "").toLowerCase().indexOf("ru") === 0;
+    var chip = document.createElement("div");
+
+    chip.setAttribute("data-oc-account", "1");
+    chip.style.cssText =
+      "position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:2147483000;max-width:78%;" +
+      "padding:8px 14px;border-radius:12px;background:rgba(22,22,22,.92);color:#fafafa;font-size:12.5px;" +
+      "font-family:inherit;box-shadow:0 2px 10px rgba(0,0,0,.25);opacity:0;transition:opacity .4s;" +
+      "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer";
+    chip.textContent = isRussian ? "\u041e\u0442\u043a\u0440\u044b\u0442 \u0430\u043a\u043a\u0430\u0443\u043d\u0442: " + label : "Signed in as: " + label;
+    chip.addEventListener(
+      "click",
+      function () {
+        chip.remove();
+      },
+      true,
+    );
+
+    (document.body || document.documentElement).appendChild(chip);
+    requestAnimationFrame(function () {
+      chip.style.opacity = "1";
+    });
+
+    setTimeout(function () {
+      chip.style.opacity = "0";
+
+      setTimeout(function () {
+        chip.remove();
+      }, 450);
+    }, 8000);
+  }
+
+  setTimeout(showAccountChip, 1200);
 
   // Nodes touched by mutations: scanned directly, so an error far down a long chat is seen at once instead of
   // being cut off by the full-scan guard.

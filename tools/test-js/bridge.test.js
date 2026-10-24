@@ -34,6 +34,7 @@ function check(name, ok, detail) {
       copyText: (t) => window.calls.push(["copy", t]),
       openLogin: () => window.calls.push(["login"]),
       hasAccount: () => window.accountConnected === true,
+      accountLabel: () => window.accountLabel || "",
     };
   });
   await page.evaluate(bridge);
@@ -168,6 +169,7 @@ function check(name, ok, detail) {
       text: p.textContent,
       hasHint: !!(hint && hint.hasAttribute("data-oc-hint")),
       buttonText: button && button.textContent,
+      hintText: hint && hint.textContent,
       opened: window.calls.slice(callsBefore).some((c) => c[0] === "login"),
       rotated: window.calls.some((c) => c[0] === "warp"),
       hintsWhileError,
@@ -184,6 +186,11 @@ function check(name, ok, detail) {
   check("one hint per error", quota.hintsWhileError === 1, JSON.stringify(quota));
   check("hint removed when the error is gone", quota.hintsAfterFix === 0, JSON.stringify(quota));
   check("hint returns when the limit returns", quota.hintsWhenBack === 1, JSON.stringify(quota));
+  check(
+    "hint explains the site sign-in is not enough",
+    quota.hintText.includes("does not connect the account to the app"),
+    String(quota.hintText),
+  );
 
   // 8a. Russian limit wording and plain "429" status text are recognised too; a bare mention of 429 is not.
   // The English cases are the texts OpenCode Zen actually sends (see Limits.kt): "Free usage exceeded,
@@ -203,11 +210,12 @@ function check(name, ok, detail) {
     const other = make("Error 4290: file not found");
     const zen = make("Free usage exceeded, subscribe to Go");
     const camel = make("FreeUsageLimitError: daily free usage limit");
-    // A Russian-language page gets a Russian offer, matching the hint text.
+    // A Russian-language page gets a Russian offer, matching the hint text. The scan is debounced, so the language
+    // must still be "ru" when the scan runs - reset it only after the wait, not right after the block is added.
     document.documentElement.lang = "ru";
     const ruBtn = make("Insufficient quota");
-    document.documentElement.lang = "";
     await new Promise((r) => setTimeout(r, 900));
+    document.documentElement.lang = "";
     const has = (p) => !!(p.nextElementSibling && p.nextElementSibling.hasAttribute("data-oc-hint"));
     const ruBox = ruBtn.nextElementSibling;
     const ruLabel = ruBox && ruBox.querySelector("[data-oc-signin]");
@@ -255,7 +263,39 @@ function check(name, ok, detail) {
   }, bridge);
   check("signed-in error keeps text", signed.text === "Error: Rate limit exceeded. Please try again later.", JSON.stringify(signed));
   check("signed-in hint without button", signed.hint === true && signed.button === false, JSON.stringify(signed));
-  check("signed-in hint speaks of the personal limit", signed.hintText.includes("another model") && !signed.hintText.includes("Connect account"), String(signed.hintText));
+  check(
+    "signed-in hint speaks of the personal limit",
+    signed.hintText.includes("another model") && !signed.hintText.includes("Connect account"),
+    String(signed.hintText),
+  );
+  check("signed-in hint names the Go remedy", signed.hintText.includes("OpenCode Go"), String(signed.hintText));
+
+  // 8d. The connected account is visible: one chip per page load with the email, gone without a label.
+  const chip = await page.evaluate(async (src) => {
+    window.accountConnected = true;
+    window.accountLabel = "me@example.com";
+    window.__ocAndroidBridge = false;
+    (0, eval)(src);
+    await new Promise((r) => setTimeout(r, 2200));
+    const shown = document.querySelector("[data-oc-account]");
+    const text = shown && shown.textContent;
+    // Re-eval must not stack a second chip while one exists.
+    window.__ocAndroidBridge = false;
+    (0, eval)(src);
+    await new Promise((r) => setTimeout(r, 2000));
+    const count = document.querySelectorAll("[data-oc-account]").length;
+    document.querySelectorAll("[data-oc-account]").forEach((el) => el.remove());
+    window.accountLabel = "";
+    window.__ocAndroidBridge = false;
+    (0, eval)(src);
+    await new Promise((r) => setTimeout(r, 2200));
+    const empty = document.querySelectorAll("[data-oc-account]").length;
+    window.accountConnected = false;
+    return { text, count, empty };
+  }, bridge);
+  check("account chip shows the email", chip.text === "Signed in as: me@example.com", String(chip.text));
+  check("one chip per page", chip.count === 1, String(chip.count));
+  check("no chip without an account", chip.empty === 0, String(chip.empty));
 
   // 8b. The watcher must not touch ordinary text or terminal output that merely mentions a limit.
   const negative = await page.evaluate(async () => {

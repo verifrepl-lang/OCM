@@ -336,12 +336,23 @@ class FakeTransport : Transport {
     var methods = """[{"id":"console","type":"oauth","label":"OpenCode Console account"},{"id":"key","type":"key","label":"API key"}]"""
     var connections = "[]"
 
+    /** How many list requests still answer like a server whose plugins have not activated yet; then it warms up. */
+    var coldReplies = 0
+
     override fun request(method: String, path: String, body: String?): Reply {
         calls += "$method $path ${body ?: ""}".trim()
 
         return when {
-            method == "GET" && path == "/api/integration/opencode" ->
-                Reply(200, """{"location":{},"data":{"id":"opencode","name":"OpenCode","methods":$methods,"connections":$connections}}""")
+            method == "GET" && path == "/api/integration" ->
+                if (coldReplies > 0) {
+                    coldReplies--
+                    Reply(500, """{"message":"boom"}""")
+                } else {
+                    Reply(
+                        200,
+                        """{"location":{},"data":[{"id":"models-dev","methods":[]},{"id":"opencode","name":"OpenCode","methods":$methods,"connections":$connections}]}""",
+                    )
+                }
             method == "POST" && path == "/api/integration/opencode/connect/oauth" ->
                 Reply(200, """{"location":{},"data":{"attemptID":"con_1","url":"https://opencode.ai/auth/device?user_code=ABCD-EFGH&x=1","instructions":"Enter code: ABCD-EFGH","mode":"auto","time":{"created":1,"expires":99}}}""")
             method == "GET" && path == "/api/integration/opencode/connect/oauth/con_1" ->
@@ -353,6 +364,8 @@ class FakeTransport : Transport {
 }
 
 fun testLogin() {
+    ConsoleLogin.PAUSE_MS = 1
+
     val t = FakeTransport()
     val login = ConsoleLogin(t)
     val attempt = login.start()
@@ -378,6 +391,24 @@ fun testLogin() {
     throws("no oauth method") { login.start() }
     eq("code none", ConsoleLogin.code("https://x/y"), null)
     eq("code encoded", ConsoleLogin.code("https://x/y?user_code=AB%2DCD"), "AB-CD")
+
+    // The integration registry is filled by a plugin that activates after the server comes up; while it runs, the
+    // list replies 500. The lookup must wait it out and complete the sign-in instead of failing on a cold server.
+    t.methods = """[{"id":"console","type":"oauth"}]"""
+    t.coldReplies = 3
+    val warm = ConsoleLogin(t)
+
+    eq("start waits for activation", warm.start().id, "con_1")
+    eq("cold replies exhausted", t.coldReplies, 0)
+    check("activation retried the list", t.calls.count { it == "GET /api/integration" } >= 4) { t.calls.joinToString("\n") }
+
+    // A wrong password makes the list answer 401: no amount of waiting helps, so the lookup gives up at once.
+    val denied = ConsoleLogin(object : Transport {
+        override fun request(method: String, path: String, body: String?) =
+            if (method == "GET" && path == "/api/integration") Reply(401, """{"message":"unauthorized"}""") else Reply(500, "{}")
+    })
+
+    eq("401 stops waiting", denied.accounts(), emptyList())
 }
 
 fun testHttpTransport() {

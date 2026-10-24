@@ -114,11 +114,14 @@ class App : Application() {
                     if (now.phase != Phase.RUNNING || now.generation != generation) return@Thread
 
                     try {
-                        val accounts = ConsoleLogin(HttpTransport(now.baseUrl, prefs.password)).signedInAccounts()
+                        // A short warmup: the sync is background work, so it must not hold a thread for minutes
+                        // waiting for the plugin activation. If it is still warming up, the next onResume sync
+                        // finds the integration already registered and reads the account.
+                        val accounts = ConsoleLogin(HttpTransport(now.baseUrl, prefs.password), warmupAttempts = 3).signedInAccounts()
 
-                        // Connections read oldest first; the newest one is whose tokens replaced auth.json, and that
-                        // is the account actually spending its quota.
-                        profiles.setAccount(snap.profileId, accounts.lastOrNull()?.label)
+                        // Connections read newest first (the upstream list is reversed), so the first one is whose
+                        // tokens are active - that is the account actually spending its quota.
+                        profiles.setAccount(snap.profileId, accounts.firstOrNull()?.label)
 
                         if (accounts.isNotEmpty()) prefs.signedIn = true
 
