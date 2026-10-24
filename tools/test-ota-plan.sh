@@ -198,5 +198,20 @@ resolve2() { env UPSTREAM_REPO=o/r UPSTREAM_GIT_URL="$up" GITHUB_OUTPUT="$work/o
 : >"$work/out"; resolve2 && ok || bad "M resolve without tag"
 expect "M resolve newest" "$(get tag)" v1.0.2
 
+# L. the pinned line changed on purpose (the app moved from the 2.x line to 1.x): the cross-line "older" comparison
+# must not refuse the build, and the cross-line diff review is skipped with a note instead of drowning in findings.
+latest v1.0.2 72; last 2.0.0 "$(git --git-dir="$up" rev-parse v2.0.0^{commit})" 1008
+run
+expect "L line switch builds" "$(get build)" true
+expect "L line switch not risky" "$(get risky)" false
+grep -q "upstream line changed" "$work/summary.md" && ok || bad "L line switch not noted"
+grep -q "diff review is skipped" "$work/summary.md" && ok || bad "L skipped diff not noted"
+grep -qi "older than" "$work/summary.md" && bad "L refused as older" || ok
+
+# within the same line the old gates keep working (a 1.x tag older than the offered 1.x is still refused)
+latest v1.0.1 72; last 1.0.2 "$c101" 1009
+run
+expect "L2 older within the line still refused" "$(get build)" false
+
 echo "ota plan: passed $pass, failed $fail"
 [ "$fail" -eq 0 ]

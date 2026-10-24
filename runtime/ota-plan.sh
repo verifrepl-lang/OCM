@@ -125,7 +125,16 @@ else
 fi
 
 # Gates
-if [ "$force" != true ] && [ -n "$last_version" ]; then
+# A deliberate line switch (upstream.json's pinned major edited by a person) must not be mistaken for a downgrade:
+# when the last offered build came from another line, the in-line "newer than" comparison and the cross-line diff
+# review do not apply. The build is still gated by everything else (age, draft, contract test, signature).
+line_switched=false
+if [ -n "$last_version" ] && [ "${last_version%%.*}" != "${version%%.*}" ]; then
+  line_switched=true
+  say "The upstream line changed: the last offered build was $last_version, this one is $version."
+fi
+
+if [ "$force" != true ] && [ -n "$last_version" ] && [ "$line_switched" != true ]; then
   if [ "$last_version" = "$version" ]; then
     stop "$version is already offered"
   fi
@@ -149,6 +158,11 @@ fi
 # What changed since the last build
 guard() {
   local old_tag="" cand g="$work/up.git" files
+
+  if [ "$line_switched" = true ]; then
+    note "the in-line diff review is skipped: the upstream line changed from ${last_version%%.*}.x to ${version%%.*}.x"
+    return 0
+  fi
 
   if [ -n "$last_version" ]; then
     for cand in "v$last_version" "$last_version"; do

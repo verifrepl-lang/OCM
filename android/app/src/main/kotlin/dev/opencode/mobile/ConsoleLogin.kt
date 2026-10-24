@@ -137,7 +137,9 @@ class ConsoleLogin(
         val reply = transport.request(
             "POST",
             "/api/integration/$integration/connect/oauth",
-            "{\"methodID\":${MiniJson.quote(methodId)}}",
+            // The 1.x line requires the (empty) inputs record even for a method that asks nothing; the 2.x line
+            // ignores it. Sending it keeps one code path working on either server build.
+            "{\"methodID\":${MiniJson.quote(methodId)},\"inputs\":{}}",
         )
 
         if (reply.code !in 200..299) throw LoginException(failure(reply))
@@ -151,13 +153,30 @@ class ConsoleLogin(
     }
 
     fun status(attempt: LoginAttempt): LoginStatus {
-        val reply = transport.request("GET", "/api/integration/$integration/connect/oauth/${attempt.id}")
+        // The two server lines expose the attempt status under different routes: the 1.x line at
+        // /api/integration/attempt/:id, the 2.x line at /api/integration/:id/connect/oauth/:id. Whichever exists
+        // answers; a 404 from both (or a server that calls the attempt gone) means the attempt expired.
+        val reply = transport.request("GET", "/api/integration/attempt/${attempt.id}")
 
-        if (reply.code == 404) return LoginStatus.Expired
+        val answer = if (reply.code == 404) {
+            val legacy = transport.request("GET", "/api/integration/$integration/connect/oauth/${attempt.id}")
 
-        if (reply.code !in 200..299) throw LoginException(failure(reply))
+            if (legacy.code == 404) return LoginStatus.Expired
+            if (legacy.code !in 200..299) throw LoginException(failure(legacy))
 
-        val data = MiniJson.obj(reply.body)?.get("data") as? Map<*, *> ?: throw LoginException("Unexpected status reply")
+            legacy
+        } else {
+            if (reply.code !in 200..299) {
+                // The 1.x handler reports an attempt that left its registry as a server error naming the id.
+                if (reply.code == 500 && reply.body.contains("not found", ignoreCase = true)) return LoginStatus.Expired
+
+                throw LoginException(failure(reply))
+            }
+
+            reply
+        }
+
+        val data = MiniJson.obj(answer.body)?.get("data") as? Map<*, *> ?: throw LoginException("Unexpected status reply")
 
         return when (data["status"]) {
             "complete" -> LoginStatus.Complete

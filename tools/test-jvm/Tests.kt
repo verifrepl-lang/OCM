@@ -336,6 +336,9 @@ class FakeTransport : Transport {
     var methods = """[{"id":"console","type":"oauth","label":"OpenCode Console account"},{"id":"key","type":"key","label":"API key"}]"""
     var connections = "[]"
 
+    /** Which line the fake server imitates for the attempt status: "legacy" answers only the 2.x route. */
+    var statusRoute = "v1"
+
     /** How many list requests still answer like a server whose plugins have not activated yet; then it warms up. */
     var coldReplies = 0
 
@@ -355,12 +358,20 @@ class FakeTransport : Transport {
                 }
             method == "POST" && path == "/api/integration/opencode/connect/oauth" ->
                 Reply(200, """{"location":{},"data":{"attemptID":"con_1","url":"https://opencode.ai/auth/device?user_code=ABCD-EFGH&x=1","instructions":"Enter code: ABCD-EFGH","mode":"auto","time":{"created":1,"expires":99}}}""")
-            method == "GET" && path == "/api/integration/opencode/connect/oauth/con_1" ->
-                Reply(200, if (status == "failed") """{"data":{"status":"failed","message":"access_denied","time":{"created":1,"expires":2}}}""" else """{"data":{"status":"$status","time":{"created":1,"expires":2}}}""")
+            method == "GET" && path == "/api/integration/attempt/con_1" && statusRoute == "v1" ->
+                statusReply()
+            method == "GET" && path == "/api/integration/opencode/connect/oauth/con_1" && statusRoute == "legacy" ->
+                statusReply()
+            // The route this fake does not serve reports 404, the way the other line answers an unknown path.
+            method == "GET" && (path == "/api/integration/attempt/con_1" || path == "/api/integration/opencode/connect/oauth/con_1") ->
+                Reply(404, "{}")
             path.endsWith("/gone") -> Reply(404, "{}")
             else -> Reply(500, """{"message":"boom"}""")
         }
     }
+
+    private fun statusReply(): Reply =
+        Reply(200, if (status == "failed") """{"data":{"status":"failed","message":"access_denied","time":{"created":1,"expires":2}}}""" else """{"data":{"status":"$status","time":{"created":1,"expires":2}}}""")
 }
 
 fun testLogin() {
@@ -373,7 +384,7 @@ fun testLogin() {
     eq("attempt id", attempt.id, "con_1")
     eq("attempt code", attempt.code, "ABCD-EFGH")
     eq("attempt expires", attempt.expiresAt, 99L)
-    check("start picks oauth method", t.calls.any { it == """POST /api/integration/opencode/connect/oauth {"methodID":"console"}""" })
+    check("start picks oauth method", t.calls.any { it == """POST /api/integration/opencode/connect/oauth {"methodID":"console","inputs":{}}""" })
     eq("status pending", login.status(attempt), LoginStatus.Pending)
     t.status = "complete"
     eq("status complete", login.status(attempt), LoginStatus.Complete)
@@ -382,6 +393,14 @@ fun testLogin() {
     t.status = "failed"
     eq("status failed", login.status(attempt), LoginStatus.Failed("access_denied"))
     eq("status 404 is expired", login.status(attempt.copy(id = "gone")), LoginStatus.Expired)
+
+    // The 2.x line serves the attempt status under its own route: the lookup falls through to it.
+    t.statusRoute = "legacy"
+    t.status = "pending"
+    eq("legacy status pending", login.status(attempt), LoginStatus.Pending)
+    t.status = "complete"
+    eq("legacy status complete", login.status(attempt), LoginStatus.Complete)
+    t.statusRoute = "v1"
 
     t.connections = """[{"type":"credential","id":"cred1","label":"me@gmail.com","method":"oauth"},{"type":"credential","id":"cred2","label":"key","method":"key"},{"type":"env","name":"X"}]"""
     eq("accounts", login.accounts().map { it.id }, listOf("cred1", "cred2"))

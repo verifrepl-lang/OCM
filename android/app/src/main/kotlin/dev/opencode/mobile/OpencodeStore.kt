@@ -11,6 +11,9 @@ import java.security.SecureRandom
  */
 object OpencodeStore {
     const val OPENAI_COMPATIBLE_PACKAGE = "@opencode/ai/providers/openai-compatible"
+
+    /** The same endpoint as [OPENAI_COMPATIBLE_PACKAGE] named the way the 1.x server line loads custom providers. */
+    const val OPENAI_COMPATIBLE_PACKAGE_V1 = "@ai-sdk/openai-compatible"
     const val RULES_PLUGIN = "android-rules.js"
     const val GUEST_RULES_DIR = "/root/.config/opencode/rules"
     const val GUEST_PLUGIN = "/root/.config/opencode/plugins/$RULES_PLUGIN"
@@ -182,7 +185,11 @@ object OpencodeStore {
         val entry = LinkedHashMap<String, Any?>()
 
         entry["name"] = provider.name
+        // Both server lines understand a custom OpenAI-compatible endpoint, but from differently shaped entries:
+        // the 2.x line reads package + settings, the 1.x line reads npm + options. Writing both keeps the profile
+        // working whichever build runs it; each server ignores the keys it does not know.
         entry["package"] = OPENAI_COMPATIBLE_PACKAGE
+        entry["npm"] = OPENAI_COMPATIBLE_PACKAGE_V1
 
         val settings = LinkedHashMap<String, Any?>()
 
@@ -191,6 +198,7 @@ object OpencodeStore {
         if (!provider.apiKey.isNullOrBlank()) settings["apiKey"] = provider.apiKey.trim()
 
         entry["settings"] = settings
+        entry["options"] = settings
 
         val models = LinkedHashMap<String, Any?>()
 

@@ -100,20 +100,30 @@ class ServerProcess(private val paths: Paths) {
         return started.exitValue() to output.toString()
     }
 
-    /** HTTP status of `GET /api/info`, or -1 when nothing answers. */
+    /** HTTP status of the server's info endpoint, or -1 when nothing answers. The 2.x line answers on /api/info, the
+     *  1.x line on /api/health; either accepting the credential counts as the server being up. */
     fun health(baseUrl: String, password: String): Int = try {
-        val connection = URL(Urls.withoutTrailingSlash(baseUrl) + "/api/info").openConnection() as HttpURLConnection
+        val root = Urls.withoutTrailingSlash(baseUrl)
+        val auth = "Basic " + Urls.basicCredential(password)
+
+        val info = statusOf("$root/api/info", auth)
+
+        if (info == 404) statusOf("$root/api/health", auth) else info
+    } catch (_: Exception) {
+        -1
+    }
+
+    private fun statusOf(url: String, auth: String): Int {
+        val connection = URL(url).openConnection() as HttpURLConnection
 
         try {
             connection.connectTimeout = 1500
             connection.readTimeout = 4000
-            connection.setRequestProperty("Authorization", "Basic " + Urls.basicCredential(password))
-            connection.responseCode
+            connection.setRequestProperty("Authorization", auth)
+            return connection.responseCode
         } finally {
             connection.disconnect()
         }
-    } catch (_: Exception) {
-        -1
     }
 
     /** Waits until the server answers 200. Returns false when it dies, or the time runs out. */
