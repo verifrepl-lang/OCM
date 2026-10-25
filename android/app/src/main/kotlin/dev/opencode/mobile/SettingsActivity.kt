@@ -158,8 +158,15 @@ class SettingsActivity : Activity() {
         for (profile in app.profiles.all) {
             val current = profile.id == active.id && !app.prefs.remote
             val badge = if (current) state(tr("Активен", "Active"), true) else null
+            // The subtitle must tell how this profile reaches its personal quota: an account, a pasted key,
+            // or neither. A key-connected profile used to read "no account connected".
+            val subtitle = when {
+                profile.account != null -> profile.name
+                profile.zenApiKey != null -> tr("Личный API-ключ подключён", "Personal API key connected")
+                else -> tr("Аккаунт не подключён", "No account connected")
+            }
 
-            card.line(profile.title, if (profile.account != null) profile.name else tr("Аккаунт не подключён", "No account connected"), badge) {
+            card.line(profile.title, subtitle, badge) {
                 profileMenu(profile)
             }
 

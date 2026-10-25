@@ -454,7 +454,20 @@ fun testLogin() {
             if (method == "GET" && path == "/api/integration") Reply(401, """{"message":"unauthorized"}""") else Reply(500, "{}")
     })
 
+    // 401 stops waiting
     eq("401 stops waiting", denied.accounts(), emptyList())
+
+    // The account sync must tell "the lookup failed" (no registry entry) apart from "the lookup worked and
+    // nothing is stored": only the second one may erase a completed sign-in from the profile.
+    t.connections = """[]"""
+    val emptyInfo = login.info()
+
+    check("warm lookup finds the integration", emptyInfo != null)
+    eq("warm server without sign-ins", login.signedInAccounts(emptyInfo!!), emptyList())
+
+    t.connections = """[{"type":"credential","id":"cred1","label":"me@gmail.com","method":"oauth"},{"type":"env","name":"X"}]"""
+    eq("sign-in read from a fetched entry", login.signedInAccounts(login.info()!!).map { it.label }, listOf("me@gmail.com"))
+    eq("empty connections parse to no accounts", login.accounts(emptyInfo ?: emptyMap<Any?, Any?>()).size, 0)
 }
 
 fun testHttpTransport() {

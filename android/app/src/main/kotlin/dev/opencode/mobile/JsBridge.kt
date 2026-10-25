@@ -45,27 +45,25 @@ class JsBridge(private val activity: MainActivity) {
     }
 
     /**
-     * True when this profile already has a Console account (or a sign-in completed on this install), so the web UI
-     * must not offer the sign-in again under a limit error. Read on the WebView's thread: both sources are cheap.
+     * True when this profile itself runs on a personal credential - a Console account or the profile's own
+     * API key - so the web UI must not offer the sign-in again under a limit error. Strictly per profile: the
+     * old global "signed in once on this install" flag made every other profile claim a personal quota it did
+     * not have. Read on the WebView's thread: both sources are cheap.
      */
     @JavascriptInterface
     fun hasAccount(): Boolean {
         val app = activity.applicationContext as App
 
-        return app.guest.isPersonal(app.profiles.active.id) || app.prefs.signedIn || app.profiles.active.account != null
+        return app.guest.isPersonal(app.profiles.active.id) || app.profiles.active.account != null
     }
 
     /**
-     * The guest-account state of the active profile: `personal` when it runs its own Console account, `anonymous`
-     * while its requests fall into the world-shared free bucket. Lets the page name the real reason under a limit
-     * error instead of guessing. Older app builds without the method read as `anonymous`.
+     * The guest-account state of the active profile: `personal` when it runs its own Console account or API
+     * key, `anonymous` while its requests fall into the world-shared free bucket. Lets the page name the real
+     * reason under a limit error instead of guessing. Older app builds without the method read as `anonymous`.
      */
     @JavascriptInterface
-    fun guestState(): String {
-        val app = activity.applicationContext as App
-
-        return if (app.guest.isPersonal(app.profiles.active.id)) "personal" else "anonymous"
-    }
+    fun guestState(): String = if (hasAccount()) "personal" else "anonymous"
 
     /**
      * The email of the Console account the active profile is signed in with, or an empty string. The web UI shows it

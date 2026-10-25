@@ -187,8 +187,16 @@ class ConsoleLogin(
     }
 
     /** The accounts stored for this integration, newest connection last. Empty when nobody has signed in. */
-    fun accounts(): List<ConsoleAccount> {
-        val connections = info()?.get("connections") as? List<*> ?: return emptyList()
+    fun accounts(): List<ConsoleAccount> = info()?.let { accounts(it) }.orEmpty()
+
+    /**
+     * Parses one integration registry entry into its stored accounts. Split from [accounts] so a caller that
+     * already did the warm lookup can tell "the lookup failed" (no registry entry at all) from "the lookup
+     * worked and nothing is stored" - conflating the two once made a warming-up server erase a completed
+     * sign-in from the profile.
+     */
+    fun accounts(info: Map<*, *>): List<ConsoleAccount> {
+        val connections = info["connections"] as? List<*> ?: return emptyList()
 
         return connections.mapNotNull {
             val c = it as? Map<*, *> ?: return@mapNotNull null
@@ -201,6 +209,9 @@ class ConsoleLogin(
 
     /** Only accounts that came from the Console sign-in, as opposed to a pasted API key. */
     fun signedInAccounts(): List<ConsoleAccount> = accounts().filter { it.method == "oauth" }
+
+    /** The same over an entry already fetched, without a second warm lookup. */
+    fun signedInAccounts(info: Map<*, *>): List<ConsoleAccount> = accounts(info).filter { it.method == "oauth" }
 
     /**
      * The integration as the server's registry knows it, or null when there is none.

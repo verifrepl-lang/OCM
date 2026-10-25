@@ -95,7 +95,14 @@ class App : Application() {
             runCatching { java.io.File("/proc/self/cmdline").readText().trim('\u0000') }.getOrDefault("")
         }
 
-    /** Reads the signed-in Console account from the running server and records it as the active profile's name. */
+    /**
+     * Reads the signed-in Console account from the running server and records it as the active profile's name.
+     *
+     * The lookup is careful in both directions. While the server warms up its registry it answers without the
+     * integration; treating that as "nobody is signed in" once wiped the account name and put a just-signed-in
+     * profile back onto the shared bucket, so every limit error then claimed the person had no account (fresh
+     * Console accounts included). The saved state may only change when the lookup itself has completed.
+     */
     fun syncAccountAsync() {
         val snap = ServerState.snapshot
 
@@ -119,18 +126,24 @@ class App : Application() {
                         // A short warmup: the sync is background work, so it must not hold a thread for minutes
                         // waiting for the plugin activation. If it is still warming up, the next onResume sync
                         // finds the integration already registered and reads the account.
-                        val accounts = ConsoleLogin(HttpTransport(now.baseUrl, prefs.password), warmupAttempts = 3).signedInAccounts()
+                        val login = ConsoleLogin(HttpTransport(now.baseUrl, prefs.password), warmupAttempts = 3)
+                        val info = login.info() ?: return@Thread
 
                         // Connections read newest first (the upstream list is reversed), so the first one is whose
                         // tokens are active - that is the account actually spending its quota.
-                        profiles.setAccount(snap.profileId, accounts.firstOrNull()?.label)
+                        val accounts = login.signedInAccounts(info)
 
                         if (accounts.isNotEmpty()) {
+                            // The integration is registered and stores a sign-in: name the profile after it.
+                            profiles.setAccount(snap.profileId, accounts.first().label)
                             prefs.signedIn = true
                             // The profile runs on its own Console account now: its quota is its own, not the
                             // world-shared anonymous bucket.
                             guest.markPersonal(snap.profileId, accounts.first().label)
                         } else {
+                            // The integration answered with no stored sign-in: a fact (a real sign-out),
+                            // not a warm-up race, so it is safe to record.
+                            profiles.setAccount(snap.profileId, null)
                             guest.markAnonymous(snap.profileId)
                         }
 

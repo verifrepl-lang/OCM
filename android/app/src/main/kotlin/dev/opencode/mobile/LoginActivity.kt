@@ -496,6 +496,12 @@ class LoginActivity : Activity() {
         app.guest.markPersonal(app.profiles.active.id, app.profiles.active.account)
         UiBus.reloadRequested = true
         app.syncAccountAsync()
+        // The running server baked the shared anonymous token into the provider while it came up without an
+        // account. The sign-in re-resolves that live, but if its one Console fetch fails, the previously
+        // chosen shared token stays on the provider and every request - a fresh account's included - still
+        // falls into the world bucket. Restarting, the same thing the API-key path does, makes the very next
+        // request go under the account for sure.
+        ServerService.send(this, ServerService.ACTION_RESTART)
         Ui.toast(this, if (wasAdding) tr("Аккаунт добавлен", "Account added") else tr("Вход выполнен", "Signed in"))
         reportConnectedAccount()
         finish()

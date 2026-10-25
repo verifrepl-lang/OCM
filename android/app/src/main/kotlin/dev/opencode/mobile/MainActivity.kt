@@ -526,10 +526,14 @@ class MainActivity : Activity(), UiHost {
 
         val account = app.profiles.active.account
 
-        if (account.isNullOrBlank()) {
-            items += tr("Войти через Google", "Sign in with Google") to { startActivity(Intent(this, LoginActivity::class.java)) }
-        } else {
-            items += tr("Аккаунт: ", "Account: ") + account to { startActivity(Intent(this, SettingsActivity::class.java)) }
+        when {
+            !account.isNullOrBlank() ->
+                items += tr("Аккаунт: ", "Account: ") + account to { startActivity(Intent(this, SettingsActivity::class.java)) }
+            // A profile on its own pasted key is on a personal quota already: offering a sign-in would only confuse.
+            app.profiles.active.zenApiKey != null ->
+                items += tr("Личный API-ключ подключён", "Personal API key connected") to { startActivity(Intent(this, SettingsActivity::class.java)) }
+            else ->
+                items += tr("Войти через Google", "Sign in with Google") to { startActivity(Intent(this, LoginActivity::class.java)) }
         }
 
         items += tr("Коннекторы и модели", "Connectors and models") to { startActivity(Intent(this, ConnectorsActivity::class.java)) }
