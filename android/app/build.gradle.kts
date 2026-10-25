@@ -27,7 +27,7 @@ android {
         // Build time of the runtime bundled in the app, in seconds. An over-the-air build has to be newer than this.
         buildConfigField("long", "RUNTIME_SEQ", "${System.getenv("RUNTIME_SEQ") ?: "0"}L")
         // owner/name of the repository that publishes signed updates. CI fills it in; empty disables update checks.
-        buildConfigField("String", "OTA_REPO", "\"${System.getenv("OTA_REPO") ?: "samartsevmaksim5-ops/OpenCode-Mobile"}\"")
+        buildConfigField("String", "OTA_REPO", "\"${System.getenv("OTA_REPO") ?: "maxfuckkz/opencode-mobile"}\"")
         buildConfigField("boolean", "WEBVIEW_DEBUG", System.getenv("WEBVIEW_DEBUG") ?: "false")
     }
 
