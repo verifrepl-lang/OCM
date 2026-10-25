@@ -3,11 +3,13 @@ name: Build APK
 # Builds the Android app with the Linux userland and a current OpenCode server inside, signs it, and publishes it as a
 # release (the release also carries the signed manifest the installed apps use to update themselves in place).
 #
+#   - every push to main is built and published to Releases automatically;
 #   - push a tag such as v1.0.0, or run the workflow by hand from the Actions tab;
 #   - the arm64 jobs need a runner of that kind: GitHub provides them free for public repositories.
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
