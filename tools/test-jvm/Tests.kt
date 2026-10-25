@@ -938,6 +938,57 @@ fun testOpencodeStore() {
     }
 }
 
+fun testGuestAccounts() {
+    val base = Files.createTempDirectory("guests").toFile()
+
+    try {
+        val file = File(base, "guests.json")
+        val store = GuestAccounts(file)
+
+        // Every profile gets an identity of its own, created on first use and different from every other one.
+        val main = store.identity("main")
+        val second = store.identity("a1b2c3")
+
+        eq("anonymous by default", main.state, GuestState.ANONYMOUS)
+        eq("label names the guest", main.label.startsWith("Guest ") || main.label.startsWith("Гость "), true)
+        eq("identities differ", main.identity == second.identity, false)
+        eq("identity shape", Regex("^guest_[a-z0-9]{6}$").matches(main.identity), true)
+        eq("no account yet", store.account("main"), null)
+        eq("not personal yet", store.isPersonal("main"), false)
+
+        // Connecting a personal Console account flips the state; removing it flips back.
+        store.markPersonal("main", "user@gmail.com")
+        eq("personal after sign-in", store.isPersonal("main"), true)
+        eq("account recorded", store.account("main"), "user@gmail.com")
+        store.markAnonymous("main")
+        eq("anonymous after sign-out", store.isPersonal("main"), false)
+        eq("account cleared", store.account("main"), null)
+        eq("identity survives the flip", store.identity("main").identity, main.identity)
+
+        // The store survives a restart: the identity is not minted again and the state is not lost.
+        val reloaded = GuestAccounts(file)
+
+        eq("identity persisted", reloaded.identity("main").identity, main.identity)
+        eq("state persisted", reloaded.isPersonal("a1b2c3"), false)
+
+        // A corrupt file is a fresh start, not a crash.
+        File(base, "broken.json").writeText("{not json")
+        val healed = GuestAccounts(File(base, "broken.json"))
+
+        eq("corrupt store starts clean", healed.identity("main").state, GuestState.ANONYMOUS)
+
+        // The quota decoder names the real causes, verified against the texts the live gateway sends.
+        eq("shared bucket", QuotaSignal.decode("Free usage limit reached. Free models work in OpenCode", hasAccount = false), QuotaSignal.Reason.FREE_BUCKET_SHARED)
+        eq("shared bucket by type", QuotaSignal.decode("anything", type = "provider.free-limit", hasAccount = false), QuotaSignal.Reason.FREE_BUCKET_SHARED)
+        eq("personal limit", QuotaSignal.decode("FreeUsageLimitError: free usage exhausted", hasAccount = true), QuotaSignal.Reason.PERSONAL_LIMIT)
+        eq("region block", QuotaSignal.decode("This model is not available in your country", type = "RegionError", hasAccount = false), QuotaSignal.Reason.REGION_BLOCKED)
+        eq("plain rate limit", QuotaSignal.decode("Rate limit exceeded, too many requests", hasAccount = false), QuotaSignal.Reason.RATE_LIMIT)
+        eq("other stays other", QuotaSignal.decode("The model returned a malformed tool call", hasAccount = false), QuotaSignal.Reason.OTHER)
+    } finally {
+        Fs.deleteTree(base)
+    }
+}
+
 fun main(args: Array<String>) {
     val fixtures = File(args[0])
 
@@ -961,6 +1012,7 @@ fun main(args: Array<String>) {
     testProxyAndLimits()
     testNetworkFeatures()
     testGithubPlugins()
+    testGuestAccounts()
 
     println("passed: $passed, failed: ${failures.size}")
     failures.forEach { println("FAIL: $it") }

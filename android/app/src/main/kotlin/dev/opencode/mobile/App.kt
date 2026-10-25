@@ -15,6 +15,9 @@ class App : Application() {
     lateinit var profiles: Profiles
         private set
 
+    lateinit var guest: GuestAccounts
+        private set
+
     lateinit var runtime: RuntimeInstaller
         private set
 
@@ -49,6 +52,8 @@ class App : Application() {
         prefs = Prefs(this)
         Log.setStage("Application.onCreate: loading profiles")
         profiles = Profiles(paths.profilesFile)
+        Log.setStage("Application.onCreate: loading guest accounts")
+        guest = GuestAccounts(paths.guestsFile)
         Log.setStage("Application.onCreate: initializing runtime installer")
         runtime = RuntimeInstaller(this, paths)
         Log.setStage("Application.onCreate: initializing OTA state")
@@ -120,7 +125,14 @@ class App : Application() {
                         // tokens are active - that is the account actually spending its quota.
                         profiles.setAccount(snap.profileId, accounts.firstOrNull()?.label)
 
-                        if (accounts.isNotEmpty()) prefs.signedIn = true
+                        if (accounts.isNotEmpty()) {
+                            prefs.signedIn = true
+                            // The profile runs on its own Console account now: its quota is its own, not the
+                            // world-shared anonymous bucket.
+                            guest.markPersonal(snap.profileId, accounts.first().label)
+                        } else {
+                            guest.markAnonymous(snap.profileId)
+                        }
 
                         return@Thread
                     } catch (e: Exception) {

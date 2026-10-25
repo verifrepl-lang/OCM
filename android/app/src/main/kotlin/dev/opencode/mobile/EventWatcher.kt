@@ -16,6 +16,8 @@ class EventWatcher(
     private val password: String,
     private val enabled: () -> Boolean,
     private val inForeground: () -> Boolean,
+    /** Whether the active profile runs its own Console account; separates personal limits from the shared bucket. */
+    private val hasAccount: () -> Boolean = { false },
     /** Called for every event whose answer died on a spent anonymous limit, foreground or not. */
     private val onQuotaExhausted: () -> Unit = {},
 ) {
@@ -121,12 +123,26 @@ class EventWatcher(
                 tr("Задача завершена", "Task finished"),
                 tr("OpenCode закончил работу. Откройте приложение, чтобы посмотреть результат.", "OpenCode has finished. Open the app to see the result."),
             )
-            OcEvent.SESSION_FAILED -> Notifier.activity(
-                context,
-                key + "err",
-                tr("Задача завершилась ошибкой", "Task failed"),
-                tr("Откройте приложение, чтобы посмотреть, что случилось.", "Open the app to see what happened."),
-            )
+            OcEvent.SESSION_FAILED -> {
+                // A quota failure gets its name said: the shared free bucket, a personal limit or a country block
+                // have different fixes, and "open the app to see what happened" hides which one applies.
+                val reason = QuotaSignal.decode(event.errorMessage.orEmpty(), event.errorType, hasAccount = hasAccount())
+
+                Notifier.activity(
+                    context,
+                    key + "err",
+                    if (reason == QuotaSignal.Reason.OTHER) {
+                        tr("Задача завершилась ошибкой", "Task failed")
+                    } else {
+                        tr("Задача остановлена лимитом", "Task stopped by a limit")
+                    },
+                    if (reason == QuotaSignal.Reason.OTHER) {
+                        tr("Откройте приложение, чтобы посмотреть, что случилось.", "Open the app to see what happened.")
+                    } else {
+                        QuotaSignal.explanation(reason)
+                    },
+                )
+            }
             OcEvent.PERMISSION_ASKED -> Notifier.activity(
                 context,
                 key + "perm",

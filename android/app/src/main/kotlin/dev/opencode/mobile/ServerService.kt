@@ -477,6 +477,7 @@ class ServerService : Service() {
             password,
             { app.prefs.notifyEnabled },
             { app.inForeground },
+            { app.guest.isPersonal(profile.id) },
             onQuotaExhausted = { run { onQuotaExhausted() } },
         ).also { it.start() }
 

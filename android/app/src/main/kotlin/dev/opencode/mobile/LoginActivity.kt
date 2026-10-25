@@ -71,7 +71,7 @@ class LoginActivity : Activity() {
         column.addView(
             Ui.text(
                 this,
-                if (adding) tr("Добавить аккаунт", "Add an account") else tr("Вход в OpenCode", "Sign in to OpenCode"),
+                if (adding) tr("Добавить аккаунт", "Add an account") else tr("Личный аккаунт OpenCode", "Your personal OpenCode account"),
                 22f,
                 palette.text,
                 bold = true,
@@ -89,8 +89,8 @@ class LoginActivity : Activity() {
                     )
                 } else {
                     tr(
-                        "Аккаунт даёт вашу личную квоту бесплатных моделей, а также Zen и платные модели. Можно пропустить и войти позже в настройках.",
-                        "An account brings your own free-model quota, plus Zen and paid models. You can skip this and sign in later in settings.",
+                        "Бесплатные модели без аккаунта - общий лимит на всех пользователей OpenCode в мире, и он почти всегда исчерпан. Личный аккаунт даёт вашу собственную квоту, Zen и платные модели. Откроется браузер: выберите Google и нужный аккаунт. Можно пропустить.",
+                        "Without an account the free models share one limit among all OpenCode users worldwide, and it is nearly always spent. A personal account brings a quota of your own, plus Zen and paid models. Your browser opens: pick Google and the account you want. You can skip this.",
                     )
                 },
                 14f,
@@ -475,6 +475,9 @@ class LoginActivity : Activity() {
         val wasAdding = adding
 
         app.prefs.signedIn = true
+        // The profile has a personal Console account now: record it before the sync names the account, so the
+        // quota hints switch from "the shared bucket" to "your own limit" right away.
+        app.guest.markPersonal(app.profiles.active.id, app.profiles.active.account)
         UiBus.reloadRequested = true
         app.syncAccountAsync()
         Ui.toast(this, if (wasAdding) tr("Аккаунт добавлен", "Account added") else tr("Вход выполнен", "Signed in"))

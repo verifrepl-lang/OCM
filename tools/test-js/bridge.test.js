@@ -237,7 +237,8 @@ function check(name, ok, detail) {
   check("FreeUsageLimitError gets a hint", wording.camel === true, JSON.stringify(wording));
   check("russian page gets a russian offer", wording.ruBtnHint === true && wording.ruBtnLabel === "\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u0430\u043a\u043a\u0430\u0443\u043d\u0442", JSON.stringify(wording));
 
-  // 8c. A profile with a connected account: the hint explains the personal limit and offers no sign-in button.
+  // 8c. A profile with a connected account: a free-usage answer explains the personal limit and offers no
+  // sign-in button; a plain rate limit just says to wait.
   const signed = await page.evaluate(async (src) => {
     window.accountConnected = true;
     window.__ocAndroidBridge = false;
@@ -245,7 +246,7 @@ function check(name, ok, detail) {
     const host = document.createElement("div");
     host.setAttribute("role", "alert");
     const p = document.createElement("p");
-    p.textContent = "Error: Rate limit exceeded. Please try again later.";
+    p.textContent = "Error: FreeUsageLimitError - Free usage limit reached.";
     host.appendChild(p);
     document.body.appendChild(host);
     await new Promise((r) => setTimeout(r, 900));
@@ -259,14 +260,14 @@ function check(name, ok, detail) {
     window.accountConnected = false;
     return result;
   }, bridge);
-  check("signed-in error keeps text", signed.text === "Error: Rate limit exceeded. Please try again later.", JSON.stringify(signed));
+  check("signed-in error keeps text", signed.text === "Error: FreeUsageLimitError - Free usage limit reached.", JSON.stringify(signed));
   check("signed-in hint without button", signed.hint === true && signed.button === false, JSON.stringify(signed));
   check(
     "signed-in hint speaks of the personal limit",
-    signed.hintText.includes("another model") && !signed.hintText.includes("Connect account"),
+    signed.hintText.includes("personal account's limit") && !signed.hintText.includes("Connect account"),
     String(signed.hintText),
   );
-  check("signed-in hint names the Go remedy", signed.hintText.includes("OpenCode Go"), String(signed.hintText));
+  check("signed-in hint names the OpenCode remedy", signed.hintText.includes("OpenCode"), String(signed.hintText));
 
   // 8d. The connected account is visible: one chip per page load with the email, gone without a label.
   const chip = await page.evaluate(async (src) => {

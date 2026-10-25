@@ -110,8 +110,7 @@ class MainActivity : Activity(), UiHost {
         ServerService.send(this)
         unsubscribe = ServerState.listen { onState(it) }
 
-        // Sign-in is never forced: no login screen pops up on its own, in any phase of the Linux setup. Google
-        // sign-in stays available in the menu, in settings, and from the quota offer in the chat.
+
         Log.setStage("Application active")
 
         // If Android refused to launch the crash screen while the previous process was dying, retry now that
@@ -203,8 +202,7 @@ class MainActivity : Activity(), UiHost {
                     startup.loading()
                     web.open(s.baseUrl, currentPassword())
 
-                    // Independent of sign-in: the battery prompt is what keeps the server alive in the background, and
-                    // most people never sign in.
+
                     firstRun()
                 }
             }
@@ -222,7 +220,13 @@ class MainActivity : Activity(), UiHost {
         }
     }
 
-    /** Prompt shown once for keeping the app running with the screen off. Sign-in is never forced. */
+    /**
+     * Prompts shown once. The battery one keeps the server alive; the guest-account one walks every new profile to
+     * a personal Console account, because the anonymous free capacity of the gateway is one bucket shared by every
+     * OpenCode user in the world and is usually spent already - only a personal account brings a quota of one's own.
+     * The drive opens the sign-in screen once (it mints the code itself and can be skipped with one tap); it never
+     * blocks the first launch and never repeats after that.
+     */
     private fun firstRun() {
         if (!app.prefs.seen("battery") && !Permissions.batteryUnrestricted(this)) {
             app.prefs.markSeen("battery")
@@ -235,6 +239,14 @@ class MainActivity : Activity(), UiHost {
                 ),
                 tr("Разрешить", "Allow"),
             ) { Permissions.requestBatteryUnrestricted(this) }
+        }
+
+        val profile = app.profiles.active
+
+        if (!app.prefs.seen("guest_drive") && !app.guest.isPersonal(profile.id) && !app.prefs.remote) {
+            app.prefs.markSeen("guest_drive")
+            app.guest.identity(profile.id)
+            startActivity(android.content.Intent(this, LoginActivity::class.java))
         }
     }
 

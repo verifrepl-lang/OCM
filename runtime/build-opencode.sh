@@ -49,9 +49,13 @@ echo "Building $repo $version ($commit)"
 cd "$src"
 
 # Patches this project carries on top of the upstream tag, one per feature/fix.
-# runtime/patches/v1 applies to the 1.x line, runtime/patches/v2 to the 2.x line;
-# the line is told apart the same way the build step below does it. Each patch is
-# applied once: a re-run on a dirty checkout recognises its own work and skips.
+# runtime/patches/v1 applies to the 1.x line, runtime/patches/v2 to the 2.x line; the line is told apart the same
+# way the build step below does it. Both directories are empty on purpose right now: the bundled server is a
+# byte-for-byte copy of the upstream client - the Zen identity included, because the gateway meters the free
+# (anonymous) capacity in one world-shared bucket that no client-side change can influence, and an altered client
+# identity only breaks the parity "the original answers, ours must too" depends on. Each patch is applied once: a
+# re-run on a dirty checkout recognises its own work and skips; a patch that no longer fits the upstream tag fails
+# the build loudly instead of shipping silently unpatched.
 line="unknown"
 if [ -f packages/opencode/script/build.ts ]; then
   line="v1"

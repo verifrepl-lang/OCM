@@ -52,7 +52,19 @@ class JsBridge(private val activity: MainActivity) {
     fun hasAccount(): Boolean {
         val app = activity.applicationContext as App
 
-        return app.prefs.signedIn || app.profiles.active.account != null
+        return app.guest.isPersonal(app.profiles.active.id) || app.prefs.signedIn || app.profiles.active.account != null
+    }
+
+    /**
+     * The guest-account state of the active profile: `personal` when it runs its own Console account, `anonymous`
+     * while its requests fall into the world-shared free bucket. Lets the page name the real reason under a limit
+     * error instead of guessing. Older app builds without the method read as `anonymous`.
+     */
+    @JavascriptInterface
+    fun guestState(): String {
+        val app = activity.applicationContext as App
+
+        return if (app.guest.isPersonal(app.profiles.active.id)) "personal" else "anonymous"
     }
 
     /**
