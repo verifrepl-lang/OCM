@@ -142,6 +142,7 @@ jobs:
           VPN_SUBSCRIPTION_URL: ${{ secrets.VPN_SUBSCRIPTION_URL }}
           VPN_NODES_TEXT: ${{ secrets.VPN_NODES_TEXT }}
         run: |
+          mkdir -p out/assets
           out=out/assets/vpn-default-nodes.txt
           : > "$out"
           if [ -n "$VPN_NODES_TEXT" ]; then
