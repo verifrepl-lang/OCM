@@ -15,6 +15,12 @@ data class Profile(
     val slot: Int,
     val createdAt: Long,
     /**
+     * The profile's own Zen API key. When set, every model request of this profile is sent under this personal key
+     * (the server gets it as OPENCODE_API_KEY) instead of the world-shared anonymous token, so the profile has a
+     * quota of its own without a Console sign-in. Kept here because the profiles file lives in app-private storage.
+     */
+    val zenApiKey: String? = null,
+    /**
      * The port this profile's server listens on. It starts as the slot-based one (BASE_PORT + slot) and is remembered
      * once the profile had to move because something else on the phone held the port, so every user keeps a port of
      * their own across restarts.
@@ -70,6 +76,13 @@ class Profiles(private val file: File, private val clock: () -> Long = System::c
 
     fun setAccount(id: String, account: String?) {
         update(id) { it.copy(account = account?.trim()?.takeIf { value -> value.isNotEmpty() }) }
+    }
+
+    /** Connects (or, with null, disconnects) the profile's own Zen API key. Takes effect on the next server start. */
+    fun setZenApiKey(id: String, key: String?) {
+        update(id) {
+            it.copy(zenApiKey = key?.trim()?.takeIf { value -> value.isNotEmpty() }?.take(200))
+        }
     }
 
     /**
@@ -144,6 +157,7 @@ class Profiles(private val file: File, private val clock: () -> Long = System::c
             slot = slot,
             createdAt = (map["createdAt"] as? Number)?.toLong() ?: 0L,
             port = port,
+            zenApiKey = (map["zenApiKey"] as? String)?.takeIf { it.isNotBlank() },
         )
     }
 
@@ -155,6 +169,7 @@ class Profiles(private val file: File, private val clock: () -> Long = System::c
             out.append("{\"id\":").append(MiniJson.quote(p.id))
             out.append(",\"name\":").append(MiniJson.quote(p.name))
             out.append(",\"account\":").append(if (p.account == null) "null" else MiniJson.quote(p.account))
+            out.append(",\"zenApiKey\":").append(if (p.zenApiKey == null) "null" else MiniJson.quote(p.zenApiKey))
             out.append(",\"slot\":").append(p.slot)
             out.append(",\"port\":").append(p.port)
             out.append(",\"createdAt\":").append(p.createdAt).append('}')

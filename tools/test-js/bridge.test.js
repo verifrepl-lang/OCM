@@ -179,7 +179,7 @@ function check(name, ok, detail) {
   check("error text kept as is", quota.text === "Error: insufficient quota", JSON.stringify(quota));
   check("hint added after the error", quota.hasHint === true, JSON.stringify(quota));
   // The page in this harness is English, so the offer follows the page language (the old label was hardcoded Russian).
-  check("quota button text", quota.buttonText === "Connect account", String(quota.buttonText));
+  check("quota button text", quota.buttonText === "Connect account or key", String(quota.buttonText));
   check("quota button opens sign-in", quota.opened === true);
   check("one hint per error", quota.hintsWhileError === 1, JSON.stringify(quota));
   check("hint removed when the error is gone", quota.hintsAfterFix === 0, JSON.stringify(quota));
@@ -235,7 +235,7 @@ function check(name, ok, detail) {
   check("unrelated number gets no hint", wording.other === false && wording.otherText === "Error 4290: file not found", JSON.stringify(wording));
   check("zen free usage exceeded gets a hint", wording.zen === true && wording.zenText === "Free usage exceeded, subscribe to Go", JSON.stringify(wording));
   check("FreeUsageLimitError gets a hint", wording.camel === true, JSON.stringify(wording));
-  check("russian page gets a russian offer", wording.ruBtnHint === true && wording.ruBtnLabel === "\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u0430\u043a\u043a\u0430\u0443\u043d\u0442", JSON.stringify(wording));
+  check("russian page gets a russian offer", wording.ruBtnHint === true && wording.ruBtnLabel === "\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u0430\u043a\u043a\u0430\u0443\u043d\u0442 \u0438\u043b\u0438 \u043a\u043b\u044e\u0447", JSON.stringify(wording));
 
   // 8c. A profile with a connected account: a free-usage answer explains the personal limit and offers no
   // sign-in button; a plain rate limit just says to wait.

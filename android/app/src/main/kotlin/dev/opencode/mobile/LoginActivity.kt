@@ -9,8 +9,9 @@ import android.widget.ScrollView
 import android.widget.TextView
 
 /**
- * Signs in to the OpenCode Console (the account behind Zen and the free quota). The sign-in page opens in the system
- * browser, where the person picks Google and then the Google account.
+ * Connects the profile's personal quota: a Console account (device-code sign-in in the browser) or the profile's own
+ * Zen API key, pasted right here. With either one every model request is sent under the profile's own credential
+ * instead of the world-shared anonymous token. Opened when the person asks for it; skippable with one tap.
  *
  * The screen is deliberate about timing: the confirmation code is minted only when the person actually presses the
  * button, and the button itself appears only once the Linux environment is unpacked and the server is running. A code
@@ -71,7 +72,7 @@ class LoginActivity : Activity() {
         column.addView(
             Ui.text(
                 this,
-                if (adding) tr("Добавить аккаунт", "Add an account") else tr("Личный аккаунт OpenCode", "Your personal OpenCode account"),
+                if (adding) tr("Добавить аккаунт", "Add an account") else tr("Личная квота OpenCode", "Your personal OpenCode quota"),
                 22f,
                 palette.text,
                 bold = true,
@@ -89,10 +90,11 @@ class LoginActivity : Activity() {
                     )
                 } else {
                     tr(
-                        "Бесплатные модели без аккаунта - общий лимит на всех пользователей OpenCode в мире, и он почти всегда исчерпан. Личный аккаунт даёт вашу собственную квоту, Zen и платные модели. Откроется браузер: выберите Google и нужный аккаунт. Можно пропустить.",
-                        "Without an account the free models share one limit among all OpenCode users worldwide, and it is nearly always spent. A personal account brings a quota of your own, plus Zen and paid models. Your browser opens: pick Google and the account you want. You can skip this.",
+                        "Без своего ключа бесплатные модели делят один лимит на всех пользователей OpenCode в мире, и он почти всегда исчерпан. Своя квота это: вход в консоль через браузер или ваш персональный API-ключ - тогда каждый запрос идёт под вашим личным ключом даже без входа в аккаунт.",
+                        "Without a key of your own the free models share one limit among all OpenCode users worldwide, and it is nearly always spent. A quota of your own is: a console sign-in via the browser, or your personal API key - then every request is sent under your personal key even without signing in.",
                     )
                 },
+
                 14f,
                 palette.muted,
             ).apply { gravity = Gravity.CENTER_HORIZONTAL },
@@ -223,6 +225,20 @@ class LoginActivity : Activity() {
             },
             Ui.params(bottom = Ui.dp(this, 8)),
         )
+
+        if (!adding) {
+            buttons.addView(
+                Ui.button(this, tr("У меня есть API-ключ", "I have an API key"), palette) { askForKey() },
+                Ui.params(bottom = Ui.dp(this, 8)),
+            )
+
+            if (app.profiles.active.zenApiKey != null) {
+                buttons.addView(
+                    Ui.button(this, tr("Убрать сохранённый ключ", "Remove the saved key"), palette) { removeKey() },
+                    Ui.params(bottom = Ui.dp(this, 8)),
+                )
+            }
+        }
 
         addSkip()
     }
@@ -540,6 +556,44 @@ class LoginActivity : Activity() {
                 }
             }
         }, "login-report").apply { isDaemon = true; start() }
+    }
+
+    /** Asks for the profile's own Zen API key and applies it: personal quota without a Console sign-in. */
+    private fun askForKey() {
+        Ui.input(
+            this,
+            tr("Ваш персональный API-ключ", "Your personal API key"),
+            tr("Ключ из консоли OpenCode", "A key from the OpenCode console"),
+            password = true,
+        ) { raw ->
+            val key = raw.trim()
+
+            if (key.isNotEmpty()) {
+                val id = app.profiles.active.id
+
+                // Every request of this profile now goes under this key: the server gets it as OPENCODE_API_KEY on the
+                // next start, which replaces the shared anonymous token (verified live on 2.1.4: auth errors instead of
+                // the shared free-limit error).
+                app.profiles.setZenApiKey(id, key)
+                app.guest.markPersonal(id, tr("личный API-ключ", "personal API key"))
+                app.prefs.signedIn = true
+                UiBus.reloadRequested = true
+                ServerService.send(this, ServerService.ACTION_RESTART)
+                Ui.toast(this, tr("Личный ключ подключён", "Personal key connected"))
+                finish()
+            }
+        }
+    }
+
+    /** Removes the saved personal key: the profile is back on the shared bucket at the next server start. */
+    private fun removeKey() {
+        val id = app.profiles.active.id
+
+        app.profiles.setZenApiKey(id, null)
+        app.guest.markAnonymous(id)
+        ServerService.send(this, ServerService.ACTION_RESTART)
+        UiBus.reloadRequested = true
+        Ui.toast(this, tr("Ключ убран: снова общий лимит", "Key removed: back to the shared limit"))
     }
 
     companion object {

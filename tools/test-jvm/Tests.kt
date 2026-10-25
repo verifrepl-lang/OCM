@@ -149,12 +149,13 @@ fun testTar(fixtures: File) {
     eq("sanitize root", TarGzExtractor.sanitize("/"), null)
 }
 
-fun cfg(compat: Boolean = false, ota: String? = null, proxy: String? = null) = ProotConfig(
+fun cfg(compat: Boolean = false, ota: String? = null, proxy: String? = null, zenKey: String? = null) = ProotConfig(
     prootBin = "/data/app/lib/libproot.so", loader = "/data/app/lib/libproot-loader.so", nativeLibDir = "/data/app/lib",
     rootfs = "/data/files/rootfs", home = "/data/files/profiles/main/home", fakeProc = "/data/files/fakeproc",
     prootTmp = "/data/files/tmp", port = 4096, password = "s3cr\"et", bridgeUrl = "http://127.0.0.1:4090",
     bridgeToken = "tok", compat = compat, bindSharedStorage = true, timeZone = "Asia/Irkutsk", otaBinDir = ota,
     proxy = proxy,
+    zenApiKey = zenKey,
 )
 
 fun testFs() {
@@ -222,6 +223,13 @@ fun testProot() {
 
     check("fakeproc keys", fp.keys == FakeProc.targets.map { it.first }.toSet())
     eq("fakeproc cpus", fp.getValue("stat").lines().count { it.startsWith("cpu") && it[3].isDigit() }, 4)
+
+    // A personal Zen key reaches the server as OPENCODE_API_KEY; without one the variable is absent, so the
+    // upstream falls back to the world-shared anonymous token. Guest env rides inside the command (/usr/bin/env -i).
+    val keyed = ProotCommand.server(cfg(zenKey = " oc-personal-key-1 ".trim()))
+
+    check("personal key env", keyed.command.contains("OPENCODE_API_KEY=oc-personal-key-1"))
+    check("no key no env", ProotCommand.server(cfg()).command.none { it.startsWith("OPENCODE_API_KEY=") })
 }
 
 fun testPortPicker() {
@@ -271,6 +279,25 @@ fun testProfiles() {
     p.setAccount(a.id, " me@gmail.com ")
     eq("account trimmed", p.find(a.id)?.account, "me@gmail.com")
     eq("title uses account", p.find(a.id)?.title, "me@gmail.com")
+
+    // Each profile keeps its own personal Zen key; blank input never saves, removal returns null.
+    p.setZenApiKey(a.id, "  oc-key-a  ")
+    p.setZenApiKey(b.id, "oc-key-b")
+
+    eq("key trimmed", p.find(a.id)?.zenApiKey, "oc-key-a")
+    p.setZenApiKey(a.id, "   ")
+
+    eq("blank key clears", p.find(a.id)?.zenApiKey, null)
+    p.setZenApiKey(a.id, "oc-key-a2")
+
+    val keyed = Profiles(file)
+
+    eq("key persisted", keyed.find(a.id)?.zenApiKey, "oc-key-a2")
+    eq("other profile key untouched", keyed.find(b.id)?.zenApiKey, "oc-key-b")
+    keyed.setZenApiKey(a.id, null)
+
+    eq("key removed", Profiles(file).find(a.id)?.zenApiKey, null)
+
     p.rename(a.id, "Renamed")
     p.setActive(a.id)
 

@@ -34,6 +34,7 @@ class ServerProcess(private val paths: Paths) {
             timeZone = java.util.TimeZone.getDefault().id,
             otaBinDir = otaDir?.path,
             proxy = proxy,
+            zenApiKey = profile.zenApiKey,
         )
     }
 

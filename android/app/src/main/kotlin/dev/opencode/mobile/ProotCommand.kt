@@ -23,6 +23,8 @@ data class ProotConfig(
     val otaBinDir: String? = null,
     /** Local HTTP proxy (a VPN subscription) for the server's outbound traffic; null connects directly. */
     val proxy: String? = null,
+    /** The profile's own Zen API key; null keeps the upstream default (the shared anonymous token). */
+    val zenApiKey: String? = null,
 )
 
 data class Launch(val command: List<String>, val env: Map<String, String>)
@@ -116,6 +118,11 @@ object ProotCommand {
         env["OPENCODE_ANDROID_BRIDGE"] = c.bridgeUrl
         env["OPENCODE_ANDROID_TOKEN"] = c.bridgeToken
         env["BROWSER"] = "/usr/local/bin/android-open"
+
+        // A personal Zen key of this profile: the server treats it as the profile's own credential and sends every
+        // model request under it instead of the world-shared anonymous token. Verified live on 2.1.4: with the
+        // variable set the server reports the env connection and the upstream "public" fallback is never applied.
+        if (!c.zenApiKey.isNullOrBlank()) env["OPENCODE_API_KEY"] = c.zenApiKey
 
         if (c.compat) {
             // Features that lean on native code or kernel interfaces Android may not allow.
