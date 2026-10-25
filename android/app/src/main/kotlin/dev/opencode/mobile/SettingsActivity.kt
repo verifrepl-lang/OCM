@@ -461,6 +461,23 @@ class SettingsActivity : Activity() {
         items += tr("Войти через Google в этом профиле", "Sign in with Google in this profile") to {
             if (isActive) startActivity(Intent(this, LoginActivity::class.java)) else switchTo(profile, thenLogin = true)
         }
+
+        if (isActive) {
+            // The profile's own key right from the profile menu: connect, change or drop it without the login screen.
+            items +=
+                (
+                    if (profile.zenApiKey != null) tr("Сменить личный API-ключ", "Change the personal API key")
+                    else tr("Подключить личный API-ключ", "Connect a personal API key")
+                ) to { ApiKey.ask(this) }
+
+            if (profile.zenApiKey != null) {
+                items += tr("Убрать личный API-ключ", "Remove the personal API key") to {
+                    ApiKey.remove(this)
+                    render()
+                }
+            }
+        }
+
         items += tr("Переименовать", "Rename") to {
             Ui.input(this, tr("Название профиля", "Profile name"), profile.name, profile.name) { name ->
                 app.profiles.rename(profile.id, name)

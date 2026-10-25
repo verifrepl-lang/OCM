@@ -536,6 +536,14 @@ class MainActivity : Activity(), UiHost {
                 items += tr("Войти через Google", "Sign in with Google") to { startActivity(Intent(this, LoginActivity::class.java)) }
         }
 
+        // A direct entrance to the profile's own key right from the menu: no detour through settings or the login
+        // screen, and it works even when a Console account is already connected (the key and the account coexist).
+        items +=
+            (
+                if (app.profiles.active.zenApiKey != null) tr("Сменить личный API-ключ", "Change the personal API key")
+                else tr("Подключить личный API-ключ", "Connect a personal API key")
+            ) to { ApiKey.ask(this) }
+
         items += tr("Коннекторы и модели", "Connectors and models") to { startActivity(Intent(this, ConnectorsActivity::class.java)) }
         items += tr("Плагины и правила", "Plugins and rules") to { startActivity(Intent(this, PluginsActivity::class.java)) }
         items += tr("Открыть адрес в окне предпросмотра", "Open an address in a preview window") to {
