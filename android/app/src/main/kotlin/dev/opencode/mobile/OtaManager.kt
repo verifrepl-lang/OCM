@@ -374,7 +374,7 @@ class OtaManager(private val context: Context, private val paths: Paths, private
     fun unmeteredNow(): Boolean = unmetered()
 
     /**
-     * Local HTTP proxies that are up right now (a VPN subscription, the WARP tunnel). GitHub is blocked or flaky on
+     * Local HTTP proxies that are up right now (a VPN subscription). GitHub is blocked or flaky on
      * some networks - the log's "Unable to resolve host github.com" - and the same tunnels that carry the server's
      * traffic then carry the update check too. Set by the app; empty means direct connections only.
      */

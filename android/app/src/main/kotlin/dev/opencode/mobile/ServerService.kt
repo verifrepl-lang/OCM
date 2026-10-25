@@ -47,13 +47,20 @@ class ServerService : Service() {
     @Volatile
     private var proxied = false
 
-    /** True when that proxy came from a VPN subscription rather than the Cloudflare WARP tunnel. */
+    /** True when that proxy came from a VPN subscription. */
     @Volatile
     private var subscriptionProxy = false
 
     /** Bumped on every start and stop so a watchdog or timer from an earlier run can tell it is stale. */
     @Volatile
     private var epoch = 0
+
+    /**
+     * Rotations of the VPN exit node in answer to a spent anonymous quota, newest last. A spent limit rotates the
+     * address at most a few times an hour: a limit that survives several fresh addresses is not about the address
+     * any more, and an endless restart loop would be worse than the honest error.
+     */
+    private val quotaRotations = ArrayDeque<Long>()
 
     private val updateTick = object : Runnable {
         override fun run() {
@@ -152,7 +159,6 @@ class ServerService : Service() {
         Thread {
             runCatching { server.stop() }.onFailure { Log.w("service", "could not stop the server: ${it.message}") }
             app.vpn.stop("service stopped")
-            app.warp.stop("service stopped")
         }.start()
 
         super.onDestroy()
@@ -276,10 +282,10 @@ class ServerService : Service() {
         while (true) {
             // The route must be ready before the server starts, because the server reads its proxy address from the
             // environment at spawn time. A selected VPN subscription is mandatory - never fall back to a direct
-            // connection silently - and so is WARP when the person explicitly turned it on.
+            // connection silently - and without one the server simply connects directly.
             val useSubscription = app.prefs.vpnSubscriptionEnabled
             val outboundProxy = try {
-                if (useSubscription) app.vpn.prepare() else app.warp.prepare(profile)
+                if (useSubscription) app.vpn.prepare() else null
             } catch (e: Exception) {
                 Log.w("service", "outbound route preparation failed: ${e.message}")
                 proxied = false
@@ -295,24 +301,6 @@ class ServerService : Service() {
 
             proxied = outboundProxy != null
             subscriptionProxy = useSubscription && outboundProxy != null
-
-            if (!useSubscription && !Warp.proxySatisfiesRequirement(app.warp.requiredFor(profile), outboundProxy)) {
-                // WARP is a network route, not a security boundary (a VPN subscription, which is, still fails closed
-                // above). When the tunnel cannot start on this phone - a crashing native binary, a network that blocks
-                // WireGuard - the server starts on the direct connection and says so, instead of leaving the person on
-                // an error screen with no way into the app. The reason stays in Settings and the log.
-                val detail = app.warp.status.detail.takeIf { it.isNotBlank() }.orEmpty()
-
-                Log.w("service", "WARP is required but unavailable, starting OpenCode on the direct connection: ${detail.lines().firstOrNull().orEmpty()}")
-                proxied = false
-                Notifier.update(
-                    this,
-                    tr(
-                        "WARP не запустился, OpenCode работает напрямую. Причина - в настройках, в разделе WARP.",
-                        "WARP could not start, so OpenCode runs on the direct connection. The reason is in Settings, under WARP.",
-                    ),
-                )
-            }
 
             val config = server.config(app.prefs, profile, bridgeUrl, otaDir, outboundProxy)
             val process = try {
@@ -430,7 +418,6 @@ class ServerService : Service() {
         quiet()
         server.stop()
         app.vpn.stop("remote server selected")
-        app.warp.stop("remote server selected")
 
         val base = Urls.normalizeServer(app.prefs.remoteUrl)
 
@@ -484,7 +471,14 @@ class ServerService : Service() {
         status(if (local) tr("Сервер работает: ", "Server is running: ") + profile.title else tr("Подключено к ", "Connected to ") + Urls.displayHost(base))
         acquireLocks()
 
-        watcher = EventWatcher(this, base, password, { app.prefs.notifyEnabled }, { app.inForeground }).also { it.start() }
+        watcher = EventWatcher(
+            this,
+            base,
+            password,
+            { app.prefs.notifyEnabled },
+            { app.inForeground },
+            onQuotaExhausted = { run { onQuotaExhausted() } },
+        ).also { it.start() }
 
         if (local) {
             watchdog(my, base, password)
@@ -517,9 +511,9 @@ class ServerService : Service() {
                 if (epoch != my) return@Thread
 
                 // A server that was told to use a proxy is useless once that proxy is dead for good (every model
-                // request would end in "connection refused"): start again, without the proxy if it cannot come back.
-                if (proxied && ((subscriptionProxy && app.vpn.status.phase == VpnSubscriptionManager.Phase.FAILED) ||
-                        (!subscriptionProxy && app.warp.status.phase == WarpManager.Phase.FAILED))) {
+                // request would end in "connection refused"): start again, and the subscription's own probe decides
+                // whether the tunnel can come back at all.
+                if (proxied && subscriptionProxy && app.vpn.status.phase == VpnSubscriptionManager.Phase.FAILED) {
                     if (++tunnelMisses >= 3) {
                         Log.w("service", "the outbound proxy is down for good, restarting the server")
                         run { if (epoch == my) startLocal(apply = false) }
@@ -540,6 +534,76 @@ class ServerService : Service() {
                 }
             }
         }, "server-watchdog").apply { isDaemon = true; start() }
+    }
+
+    /**
+     * An anonymous answer just died on a spent per-IP limit. With no account bound to the profile the limit belongs
+     * to the current exit address, so the app picks the next node of the VPN subscription and restarts the server
+     * through it - the fresh address comes with a fresh allowance. Anything less (a signed-in profile, no
+     * subscription, nothing to rotate to) is answered with an honest notification instead.
+     */
+    private fun onQuotaExhausted() {
+        val profile = runCatching { app.profiles.active }.getOrNull() ?: return
+
+        if (profile.account != null) return
+
+        if (!app.prefs.vpnSubscriptionEnabled) {
+            Notifier.update(
+                this,
+                tr(
+                    "Квота бесплатных моделей на этом IP исчерпана. Подключи аккаунт или включи VPN-подписку, чтобы менять адрес.",
+                    "The free-model quota for this IP is used up. Connect an account or enable the VPN subscription to change the address.",
+                ),
+            )
+
+            return
+        }
+
+        val now = System.currentTimeMillis()
+
+        while (quotaRotations.isNotEmpty() && now - quotaRotations.first() > QUOTA_ROTATION_WINDOW_MS) quotaRotations.removeFirst()
+
+        if (quotaRotations.isNotEmpty() && now - quotaRotations.last() < QUOTA_ROTATION_COOLDOWN_MS) return
+
+        if (quotaRotations.size >= QUOTA_ROTATION_MAX) {
+            Notifier.update(
+                this,
+                tr(
+                    "Квота исчерпана и не снялась сменой адреса. Подожди сброса или подключи аккаунт с личным лимитом.",
+                    "The quota is used up and changing the address did not help. Wait for the reset or connect an account with a limit of its own.",
+                ),
+            )
+
+            return
+        }
+
+        val nodes = app.vpn.nodes()
+
+        if (nodes.size < 2) {
+            Notifier.update(
+                this,
+                tr(
+                    "Квота IP исчерпана. В подписке один сервер - добавить адреса некуда, поэтому приложение работает как есть.",
+                    "The IP quota is used up. The subscription has a single server, so there is no other address to switch to.",
+                ),
+            )
+
+            return
+        }
+
+        val node = app.vpn.rotateToNext() ?: return
+
+        quotaRotations.addLast(now)
+        Log.i("service", "anonymous quota spent: rotating the exit node to ${node.name} and restarting the server")
+        Notifier.update(
+            this,
+            tr("Квота IP исчерпана: меняю адрес на ", "The IP quota is used up: switching the address to ") + node.name,
+        )
+
+        // The new node only takes effect through a server restart, because the process read its proxy address from
+        // the environment at spawn time.
+        resetBudget()
+        begin(apply = false)
     }
 
     private fun onCrash(my: Int) {
@@ -765,6 +829,16 @@ class ServerService : Service() {
 
         /** Absolute restart attempts allowed before showing the error screen instead of restarting again. */
         private const val MAX_RESTARTS = 6
+
+        /** Two quota rotations may not be closer together than this, so a flapping error cannot spin the server. */
+        private const val QUOTA_ROTATION_COOLDOWN_MS = 90_000L
+
+        /** Rotations older than this leave the budget, one fresh allowance per window. */
+        private const val QUOTA_ROTATION_WINDOW_MS = 60 * 60_000L
+
+        /** Address changes per window at most: a limit that survives this many fresh addresses is not about the address. */
+        private const val QUOTA_ROTATION_MAX = 6
+
         const val ACTION_STOP = "dev.opencode.mobile.STOP"
         const val ACTION_RESTART = "dev.opencode.mobile.RESTART"
         const val ACTION_APPLY = "dev.opencode.mobile.APPLY_UPDATE"

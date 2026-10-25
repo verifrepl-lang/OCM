@@ -16,7 +16,6 @@ object NetworkDiagnostics {
         val region: String = "",
         val city: String = "",
         val isp: String = "",
-        val warp: String = "",
         val colo: String = "",
     ) {
         fun display(): String = buildList {
@@ -24,7 +23,6 @@ object NetworkDiagnostics {
             val place = listOf(city, region, country).filter { it.isNotBlank() }.distinct().joinToString(", ")
             if (place.isNotBlank()) add(tr("Местоположение: ", "Location: ") + place)
             if (isp.isNotBlank()) add(tr("Провайдер: ", "ISP: ") + isp)
-            if (warp.isNotBlank()) add("Cloudflare WARP: $warp")
             if (colo.isNotBlank()) add(tr("Узел Cloudflare: ", "Cloudflare edge: ") + colo)
         }.joinToString("\n")
     }
@@ -73,7 +71,7 @@ object NetworkDiagnostics {
             // The IP and country code from Cloudflare remain useful if the geolocation endpoint is unavailable.
         }
 
-        return IpLocation(ip, country, region, city, isp, trace["warp"].orEmpty(), trace["colo"].orEmpty())
+        return IpLocation(ip, country, region, city, isp, trace["colo"].orEmpty())
     }
 
     fun currentIpLocationText(proxy: Proxy? = null): String = try {
@@ -145,9 +143,18 @@ object NetworkDiagnostics {
         return id == expectedId && qr && rcode == 0 && answers > 0
     }
 
-    fun cloudflareTrace(proxy: Proxy? = null): Warp.Trace? = runCatching {
+    /** What Cloudflare's trace page says about the connection that asked: the egress IP. */
+    data class Trace(val ip: String)
+
+    fun cloudflareTrace(proxy: Proxy? = null): Trace? = runCatching {
         val response = requestText(URL("https://www.cloudflare.com/cdn-cgi/trace"), proxy, "text/plain")
-        Warp.parseTrace(response)
+        val ip = response.lineSequence().mapNotNull { line ->
+            val eq = line.indexOf('=')
+
+            if (eq > 0 && line.substring(0, eq).trim() == "ip") line.substring(eq + 1).trim().takeIf { it.isNotEmpty() } else null
+        }.firstOrNull() ?: return null
+
+        Trace(ip)
     }.getOrNull()
 
     private fun requestText(url: URL, proxy: Proxy?, accept: String): String {

@@ -16,6 +16,8 @@ class EventWatcher(
     private val password: String,
     private val enabled: () -> Boolean,
     private val inForeground: () -> Boolean,
+    /** Called for every event whose answer died on a spent anonymous limit, foreground or not. */
+    private val onQuotaExhausted: () -> Unit = {},
 ) {
     @Volatile
     private var running = false
@@ -103,8 +105,10 @@ class EventWatcher(
         }
 
         // Quota and rate-limit events are provider answers, not network failures: the tunnel is a route, not a quota
-        // mechanism, so nothing here reconnects or re-registers WARP. The honest answers to a spent limit are waiting
-        // for the reset or signing in with an account that has quota of its own.
+        // mechanism, so nothing here reconnects or re-registers the route because of them. What a spent anonymous
+        // limit does do is hand the decision to the service: without an account the limit belongs to the current
+        // address, and a different exit node is a fresh one.
+        if (Limits.failedOnLimit(event.type, event.raw)) onQuotaExhausted()
 
         if (!enabled() || inForeground()) return
 

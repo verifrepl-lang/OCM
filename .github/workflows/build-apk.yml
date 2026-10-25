@@ -134,17 +134,27 @@ jobs:
       - name: Check the server against what the app needs
         run: bash runtime/contract-test.sh out/server/opencode "${{ steps.up.outputs.version }}"
 
-      # wireproxy is built from source with GOOS=android (the released binaries are GOOS=linux and die on Android at
-      # startup: their sticky-socket netlink monitor is denied by the app sandbox - see fetch-wireproxy.sh).
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version: "1.23"
+      # The VPN subscription that ships as the app's default node list: pulled from repo secrets at build time.
+      # VPN_NODES_TEXT wins when both are set (raw vless:// / hy2:// links, one per line); VPN_SUBSCRIPTION_URL is
+      # fetched here. Without either the file stays empty and the subscription feature waits for a manual import.
+      - name: Default VPN nodes from secrets
+        env:
+          VPN_SUBSCRIPTION_URL: ${{ secrets.VPN_SUBSCRIPTION_URL }}
+          VPN_NODES_TEXT: ${{ secrets.VPN_NODES_TEXT }}
+        run: |
+          out=out/assets/vpn-default-nodes.txt
+          : > "$out"
+          if [ -n "$VPN_NODES_TEXT" ]; then
+            printf '%s\n' "$VPN_NODES_TEXT" > "$out"
+          elif [ -n "$VPN_SUBSCRIPTION_URL" ]; then
+            curl -fsSL --retry 3 --max-time 60 -H "User-Agent: OpenCode-Mobile build" "$VPN_SUBSCRIPTION_URL" -o "$out" || : > "$out"
+          fi
+          echo "vpn-default-nodes.txt is $(wc -c < "$out") bytes"
 
       - name: Launcher libraries (proot)
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq patchelf
           bash runtime/fetch-proot.sh out/jniLibs/arm64-v8a
-          bash runtime/fetch-wireproxy.sh out/jniLibs/arm64-v8a
           bash runtime/fetch-sing-box.sh out/jniLibs/arm64-v8a
 
       - name: Build date
@@ -263,7 +273,7 @@ jobs:
           echo "apk=$apk"
           # Read the listing once; matching it with grep -q in a loop is fragile and slow for a 250 MB APK.
           unzip -Z1 "$apk" > "$RUNNER_TEMP/apk-files.txt"
-          for want in assets/rootfs.tgz assets/rootfs.stamp assets/bridge.js assets/sing-box-LICENSE.txt lib/arm64-v8a/libproot.so lib/arm64-v8a/libproot-loader.so lib/arm64-v8a/libtalloc.so lib/arm64-v8a/libandroid-shmem.so lib/arm64-v8a/libwireproxy.so lib/arm64-v8a/libsingbox.so; do
+          for want in assets/rootfs.tgz assets/rootfs.stamp assets/bridge.js assets/sing-box-LICENSE.txt assets/vpn-default-nodes.txt lib/arm64-v8a/libproot.so lib/arm64-v8a/libproot-loader.so lib/arm64-v8a/libtalloc.so lib/arm64-v8a/libandroid-shmem.so lib/arm64-v8a/libsingbox.so; do
             if grep -qxF "$want" "$RUNNER_TEMP/apk-files.txt"; then echo "ok: $want"; else echo "::error::missing from the APK: $want"; exit 1; fi
           done
           apksigner="$(ls "${ANDROID_HOME:-/usr/local/lib/android/sdk}"/build-tools/*/apksigner | sort -V | tail -1)"

@@ -14,7 +14,7 @@ class ServerProcess(private val paths: Paths) {
     /** Where the server log stood when the running attempt started, so only that attempt is inspected on failure. */
     private var logMark: Long = 0
 
-    fun config(prefs: Prefs, profile: Profile, bridgeUrl: String, otaDir: File?, warpProxy: String? = null): ProotConfig {
+    fun config(prefs: Prefs, profile: Profile, bridgeUrl: String, otaDir: File?, proxy: String? = null): ProotConfig {
         val home = Profiles.homeDir(paths.profilesDir, profile)
 
         return ProotConfig(
@@ -33,7 +33,7 @@ class ServerProcess(private val paths: Paths) {
             bindSharedStorage = prefs.bindStorage,
             timeZone = java.util.TimeZone.getDefault().id,
             otaBinDir = otaDir?.path,
-            proxy = warpProxy,
+            proxy = proxy,
         )
     }
 

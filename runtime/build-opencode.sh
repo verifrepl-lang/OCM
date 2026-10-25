@@ -48,6 +48,32 @@ echo "Building $repo $version ($commit)"
 
 cd "$src"
 
+# Patches this project carries on top of the upstream tag, one per feature/fix.
+# runtime/patches/v1 applies to the 1.x line, runtime/patches/v2 to the 2.x line;
+# the line is told apart the same way the build step below does it. Each patch is
+# applied once: a re-run on a dirty checkout recognises its own work and skips.
+line="unknown"
+if [ -f packages/opencode/script/build.ts ]; then
+  line="v1"
+elif [ -f packages/cli/script/build-node.ts ]; then
+  line="v2"
+fi
+patch_dir="$here/patches/$line"
+if [ -d "$patch_dir" ]; then
+  for patch in "$patch_dir"/*.patch; do
+    [ -e "$patch" ] || continue
+    if git apply --check "$patch" 2>/dev/null; then
+      git apply "$patch"
+      echo "Applied $(basename "$patch")"
+    elif git apply --check --reverse "$patch" 2>/dev/null; then
+      echo "$(basename "$patch") already applied"
+    else
+      echo "Patch $(basename "$patch") does not apply to $ref" >&2
+      exit 1
+    fi
+  done
+fi
+
 python3 -m pip install --quiet --break-system-packages setuptools 2>/dev/null || true
 bun install --frozen-lockfile
 

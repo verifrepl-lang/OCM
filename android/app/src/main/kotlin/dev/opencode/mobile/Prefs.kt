@@ -56,18 +56,6 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("floating_menu", true)
         set(value) = sp.edit().putBoolean("floating_menu", value).apply()
 
-    /**
-     * Route the server's outbound traffic through the Cloudflare WARP tunnel. Off by default: anonymous
-     * free-model quota is counted per IP address, and Cloudflare WARP egress addresses are shared by the whole
-     * WARP user base, so a fresh install that tunnels from the first request lands on an IP whose shared
-     * anonymous quota is already drained - the "quota exhausted on the very first message" reports. Direct
-     * connection uses the phone's own IP and its own quota; WARP stays an explicit opt-in for people whose
-     * own address is blocked or drained.
-     */
-    var warpEnabled: Boolean
-        get() = sp.getBoolean("warp_enabled", false)
-        set(value) = sp.edit().putBoolean("warp_enabled", value).apply()
-
     /** DNS resolver tests in settings are manual diagnostics; off by default and never changes Android's system DNS. */
     var dnsDiagnosticsEnabled: Boolean
         get() = sp.getBoolean("dns_diagnostics_enabled", false)

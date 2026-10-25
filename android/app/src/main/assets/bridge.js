@@ -245,14 +245,10 @@
     };
   }
 
-  // Composer layout on phones: a long model name used to push the model-variant (thinking) control out of the
-  // scrollable controls row, so it was clipped exactly where the send button sits. Cap the wide triggers instead.
-  var composerStyle = document.createElement("style");
-
-  composerStyle.textContent =
-    '@media (max-width: 767px) { [data-slot="composer-controls"] [class*="max-w-[220px]"] { max-width: 148px !important; } }';
-
-  (document.head || document.documentElement).appendChild(composerStyle);
+  // Composer layout on phones is fixed in the bundled web UI itself (runtime/patches/v1:
+  // the model and thinking-level controls cap their width and the controls row scrolls
+  // instead of spilling under the send button). The old 2.x-era CSS override targeted
+  // data-slot="composer-controls", markup the 1.x web UI no longer renders, so it is gone.
 
   // Limit and rate-limit answers come from the provider and are shown exactly as received: this script never
   // rewrites an error. Under the error block it only adds a short hint (data-oc-hint) that names the common causes

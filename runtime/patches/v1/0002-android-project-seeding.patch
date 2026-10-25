@@ -1,0 +1,75 @@
+diff --git a/packages/app/src/context/global.tsx b/packages/app/src/context/global.tsx
+index 8343889..0c3ae5b 100644
+--- a/packages/app/src/context/global.tsx
++++ b/packages/app/src/context/global.tsx
+@@ -140,6 +140,70 @@ function createServerCtx(
+   const isLocal =
+     (conn?.type === "sidecar" && conn.variant === "base") || (conn?.type === "http" && isLocalHost(conn.http.url))
+ 
++  // OpenCode for Android: the app binds the phone's shared storage at /sdcard and
++  // the projects a person already had live under /sdcard/Проекты. The web UI keeps
++  // its sidebar list in browser storage, so a fresh install (or a switch between
++  // server lines) starts with an empty sidebar. When nothing else is there, put
++  // the phone's own project folders back once.
++  if (isLocal) {
++    let seeded = false
++    createEffect(() => {
++      if (seeded) return
++      if (projects.list().length > 0) {
++        seeded = true
++        return
++      }
++      // Closed on purpose earlier in this browser: re-adding would undo the user's
++      // own cleanup, so leave the sidebar alone.
++      if (projects.recentlyClosed().some((worktree) => worktree.startsWith("/sdcard/"))) {
++        seeded = true
++        return
++      }
++      seeded = true
++      void (async () => {
++        type SeededNode = {
++          type: "file" | "directory"
++          path: string
++          name?: string
++          absolute?: string
++          ignored?: boolean
++        }
++        const list = async (directory: string) => {
++          const result = await sdk.api.file.list({ location: { directory } })
++          return (result.data ?? []) as unknown as SeededNode[]
++        }
++        const baseName = (node: SeededNode) =>
++          node.name ?? node.path.replace(/^\/+|\/+$/g, "").split("/").pop() ?? ""
++
++        try {
++          const shared = await list("/sdcard")
++          const folder = ["Проекты", "Projects"].find((candidate) =>
++            shared.some((node) => node.type === "directory" && baseName(node) === candidate),
++          )
++          if (!folder) return
++
++          const root = `/sdcard/${folder}`
++          const children = await list(root)
++          const subprojects = children
++            .filter((node) => node.type === "directory" && !baseName(node).startsWith("."))
++            .filter((node) => !node.ignored)
++            .slice(0, 8)
++
++          // open() prepends, so the root goes in last to sit on top of the list.
++          for (const node of [...subprojects].reverse()) {
++            const worktree = node.absolute ?? `${root}/${baseName(node)}`
++            projects.open(worktree)
++            projects.collapse(worktree)
++          }
++          projects.open(root)
++        } catch {
++          // No /sdcard on this server (desktop, plain browser) or the listing
++          // failed: leave the project list exactly as it was.
++        }
++      })()
++    })
++  }
++
+   return {
+     queryClient,
+     sdk,

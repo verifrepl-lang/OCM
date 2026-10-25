@@ -1,11 +1,8 @@
 package dev.opencode.mobile
 
-import android.graphics.Outline
 import android.view.Gravity
 import android.view.View
-import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 
@@ -14,7 +11,7 @@ import android.widget.TextView
  * person closes it with the corner cross, a tap on the dark backdrop, or Back; it never comes back afterwards.
  */
 object UpdateBanner {
-    private const val SEEN_KEY = "update_108"
+    private const val SEEN_KEY = "update_110"
 
     /** Guards against a second copy stacking over the first one when the page reports being ready again. */
     private var active = false
@@ -47,34 +44,20 @@ object UpdateBanner {
         // Header: the title on the left, the cross on the right.
         val header = Ui.horizontal(activity)
         header.addView(
-            Ui.text(activity, tr("ОБНОВЛЕНИЕ 1.0.8", "UPDATE 1.0.8"), 16f, palette.text, bold = true),
+            Ui.text(activity, tr("ОБНОВЛЕНИЕ 1.0.10", "UPDATE 1.0.10"), 16f, palette.text, bold = true),
             Ui.params(0, Ui.WRAP, weight = 1f),
         )
         header.addView(Ui.iconButton(activity, R.drawable.ic_close, tr("Закрыть", "Close"), palette, tint = palette.muted, sizeDp = 36) { dismiss() })
         card.addView(header, Ui.params(Ui.MATCH, Ui.WRAP, bottom = Ui.dp(activity, 12)))
 
-        // The announcement picture with corners rounded to match the card.
-        val image = ImageView(activity).apply {
-            setImageResource(R.drawable.update_108)
-            adjustViewBounds = true
-            clipToOutline = true
-            outlineProvider = object : ViewOutlineProvider() {
-                override fun getOutline(view: View, outline: Outline) {
-                    outline.setRoundRect(0, 0, view.width, view.height, Ui.dp(activity, 14).toFloat())
-                }
-            }
-            contentDescription = tr("Обновление 1.0.8", "Update 1.0.8")
-        }
-        card.addView(image, Ui.params(Ui.MATCH, Ui.WRAP, bottom = Ui.dp(activity, 12)))
-
         card.addView(Ui.text(activity, tr("Что изменено:", "What changed:"), 14f, palette.text, bold = true), Ui.params(bottom = Ui.dp(activity, 6)))
 
         for (line in listOf(
-            tr("- починен падающий WARP: туннель из прошлого запуска приложения больше не занимает порты, и каждый новый туннель умирает на \"address already in use\"", "- fixed the crashing WARP: a tunnel left over from an earlier app run no longer holds the ports, so every new tunnel died on \"address already in use\""),
-            tr("- причина падения туннеля теперь видна в ошибке: к сообщению прикладывается журнал wireproxy", "- the tunnel's own reason for dying is now quoted in the error: wireproxy's log comes along with the message"),
-            tr("- устранён крах запуска сервера при открытом экране настроек (ошибка Can't create handler)", "- removed the server-start crash while the settings screen was open (the Can't create handler error)"),
-            tr("- регистрация WARP быстрее: ошибки DNS больше не сжигают три таймаута подряд", "- WARP registration is faster: DNS errors no longer burn three timeouts in a row"),
-            tr("- перезапуски туннеля защищены от гонки: восстанавливает его ровно один поток", "- tunnel restarts are race-proof: exactly one thread owns the recovery now"),
+            tr("- WARP убран. Вместо него - VPN-подписка (VLESS/Hysteria2 через sing-box): импортируй ссылку в Настройках, Сеть", "- WARP is gone. In its place is a VPN subscription (VLESS/Hysteria2 via sing-box): import a link in Settings, Network"),
+            tr("- без подключённого аккаунта приложение само замечает исчерпанную квоту IP, меняет адрес через подписку и перезапускает сервер", "- without a connected account the app notices a spent IP quota on its own, switches the address via the subscription and restarts the server"),
+            tr("- вернулись старые пути проектов: папка Проекты из памяти телефона снова в списке с первого запуска", "- the old project paths are back: the phone's storage Projects folder is in the list from the first launch"),
+            tr("- починен выбор уровня мышления: он больше не уезжает под кнопку отправки на узком экране", "- fixed the thinking-level control: it no longer slides under the send button on a narrow screen"),
+            tr("- подтверждение разрешения больше не падает с ошибкой Permission request not found", "- approving a permission no longer fails with Permission request not found"),
         )) {
             card.addView(Ui.text(activity, line, 14f, palette.muted), Ui.params(bottom = Ui.dp(activity, 3)))
         }

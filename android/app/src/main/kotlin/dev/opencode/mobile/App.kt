@@ -21,9 +21,6 @@ class App : Application() {
     lateinit var ota: OtaManager
         private set
 
-    lateinit var warp: WarpManager
-        private set
-
     lateinit var vpn: VpnSubscriptionManager
         private set
 
@@ -56,15 +53,15 @@ class App : Application() {
         runtime = RuntimeInstaller(this, paths)
         Log.setStage("Application.onCreate: initializing OTA state")
         ota = OtaManager(this, paths, prefs)
-        Log.setStage("Application.onCreate: initializing WARP")
-        warp = WarpManager(paths, prefs)
         Log.setStage("Application.onCreate: initializing VPN subscriptions")
         vpn = VpnSubscriptionManager(paths, prefs)
-        // Update checks fall back to the running tunnels when GitHub cannot be reached directly.
+        // The build can carry a default node list (assets/vpn-default-nodes.txt, filled from repo secrets); it is
+        // imported once on its own thread, so a cold start never waits on it.
+        Thread({ runCatching { vpn.seedDefaults(this) } }, "vpn-defaults").apply { isDaemon = true; start() }
+        // Update checks fall back to the running tunnel when GitHub cannot be reached directly.
         ota.fallbackProxies = {
             listOfNotNull(
                 vpn.proxyUrl.takeIf { vpn.listening() },
-                Warp.PROXY_URL.takeIf { warp.listening() },
             )
         }
         // A device with a broken notification service must still let the app open; startForeground failures are

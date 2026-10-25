@@ -24,7 +24,6 @@ class SettingsActivity : Activity() {
     private lateinit var column: LinearLayout
     private var unsubscribeState: (() -> Unit)? = null
     private var unsubscribeUpdates: (() -> Unit)? = null
-    private var unsubscribeWarp: (() -> Unit)? = null
     private var networkIpStatus = tr("Нажми «Обновить IP и геолокацию», чтобы проверить текущий маршрут.", "Tap Refresh IP and location to check the current route.")
     private var dnsTestStatus = tr("DNS-тесты выключены. Включи их, чтобы вручную проверить резолверы.", "DNS tests are off. Enable them to check resolvers manually.")
     private var networkTaskActive = false
@@ -58,15 +57,11 @@ class SettingsActivity : Activity() {
         super.onStart()
         unsubscribeState = ServerState.listen { render() }
         unsubscribeUpdates = Updates.listen { render() }
-        // The warp manager reports from the server-start thread; the screen rebuilds itself on the UI thread only,
-        // or rendering mid-prepare throws "Can't create handler" and takes the server start down with it.
-        unsubscribeWarp = app.warp.listen { runOnUiThread { if (!isFinishing) render() } }
     }
 
     override fun onStop() {
         unsubscribeState?.invoke()
         unsubscribeUpdates?.invoke()
-        unsubscribeWarp?.invoke()
         super.onStop()
     }
 
@@ -134,7 +129,6 @@ class SettingsActivity : Activity() {
         column.removeAllViews()
 
         profilesSection()
-        warpSection()
         networkSection()
         extensionsSection()
         serverSection()
@@ -197,77 +191,8 @@ class SettingsActivity : Activity() {
         }
     }
 
-    /** The Cloudflare WARP tunnel: an opt-in network route for the server's outbound traffic. */
-    private fun warpSection() {
-        val card = section(tr("Cloudflare WARP", "Cloudflare WARP"))
-        val status = app.warp.status
-
-        card.addView(
-            Ui.text(
-                this,
-                tr(
-                    "WARP маршрутизирует исходящие запросы сервера через Cloudflare. По умолчанию выключено: квота бесплатных моделей считается по IP, а адреса выхода WARP общие для миллионов пользователей, поэтому туннель с первого же сообщения может попасть на исчерпанную квоту. Включайте, если ваш собственный адрес заблокирован или его квота уже израсходована. Это сетевой маршрут, а не способ сбросить лимит. С подключённым аккаунтом WARP не используется.",
-                    "WARP routes the server's outbound requests through Cloudflare. It is off by default: the free-model quota is counted per IP, and WARP egress addresses are shared by millions of users, so a tunnel can land on a drained quota from the very first message. Enable it when your own address is blocked or its quota is spent. This is a network route, not a way to reset a limit. With a connected account WARP stays idle.",
-                ),
-                12f,
-                palette.muted,
-            ),
-            Ui.params(bottom = Ui.dp(this, 8)),
-        )
-
-        card.toggle(
-            tr("Использовать WARP", "Use WARP"),
-            tr("Туннель поднимается вместе с сервером. Работает, только пока аккаунт не подключён.", "The tunnel starts with the server. It only runs while no account is connected."),
-            app.prefs.warpEnabled,
-        ) { value ->
-            app.prefs.warpEnabled = value
-
-            if (!value) app.warp.stop("turned off in settings")
-
-            // The server reads its proxy environment once, at spawn: a toggle while it already runs silently leaves
-            // the old route in place (with WARP off - requests into a dead port), so restart to apply it for real.
-            if (!app.prefs.remote && ServerState.snapshot.phase == Phase.RUNNING) {
-                Ui.toast(this, tr("Перезапускаю сервер, чтобы применить WARP...", "Restarting the server to apply WARP..."))
-                ServerService.send(this, ServerService.ACTION_RESTART)
-            }
-
-            render()
-        }
-
-        val label = when (status.phase) {
-            WarpManager.Phase.RUNNING -> tr("Туннель активен", "Tunnel active")
-            WarpManager.Phase.PREPARING -> tr("Поднимается...", "Coming up...")
-            WarpManager.Phase.FAILED -> tr("Ошибка", "Failed")
-            WarpManager.Phase.OFF ->
-                when {
-                    !app.prefs.warpEnabled -> tr("Выключен", "Off")
-                    app.profiles.active.account != null -> tr("Не используется: подключён аккаунт", "Not used: an account is connected")
-                    !File(app.paths.nativeLibDir, "libwireproxy.so").exists() -> tr("Недоступен в этой сборке", "Not available in this build")
-                    else -> tr("Поднимется при запуске сервера", "Will come up with the server")
-                }
-        }
-        val detail = when {
-            status.phase == WarpManager.Phase.FAILED && status.detail.isNotEmpty() -> "$label: ${status.detail}"
-            else -> label
-        }
-        val badgeText = when (status.phase) {
-            WarpManager.Phase.RUNNING -> tr("Вкл", "On")
-            WarpManager.Phase.PREPARING -> tr("...", "...")
-            WarpManager.Phase.FAILED -> tr("Ошибка", "Failed")
-            WarpManager.Phase.OFF -> tr("Нет", "Off")
-        }
-
-        card.line(tr("Состояние", "State"), detail, state(badgeText, status.phase == WarpManager.Phase.RUNNING || status.phase == WarpManager.Phase.OFF))
-    }
-
     /** Current egress and DNS diagnostics live in Settings, separate from the floating shortcut menu. */
-    private fun diagnosticsProxy(): Proxy? {
-        app.vpn.proxy()?.let { return it }
-        if (app.warp.status.phase == WarpManager.Phase.RUNNING && app.warp.listening()) {
-            return Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", Warp.HTTP_PORT))
-        }
-        return null
-    }
+    private fun diagnosticsProxy(): Proxy? = app.vpn.proxy()
 
     private fun networkSection() {
         val card = section(tr("Сеть, IP и VPN", "Network, IP and VPN"))
@@ -369,7 +294,7 @@ class SettingsActivity : Activity() {
                 return@toggle
             }
             app.prefs.vpnSubscriptionEnabled = enabled
-            if (enabled) app.warp.stop("VPN subscription selected") else app.vpn.stop("VPN subscription disabled")
+            if (!enabled) app.vpn.stop("VPN subscription disabled")
             if (!app.prefs.remote && ServerState.snapshot.phase == Phase.RUNNING) {
                 Ui.toast(this, tr("Перезапускаю локальный сервер для применения маршрута...", "Restarting the local server to apply the route..."))
                 ServerService.send(this, ServerService.ACTION_RESTART)
@@ -384,6 +309,18 @@ class SettingsActivity : Activity() {
             VpnSubscriptionManager.Phase.FAILED -> tr("Ошибка", "Failed")
         }
         card.line(tr("Состояние VPN-подписки", "Subscription VPN status"), listOf(vpnLabel, vpnStatus.selected, vpnStatus.detail).filter { it.isNotBlank() }.distinct().joinToString(" · "), state(vpnLabel, vpnStatus.phase == VpnSubscriptionManager.Phase.RUNNING))
+        card.addView(
+            Ui.text(
+                this,
+                tr(
+                    "Пока аккаунт не подключён и включена подписка, приложение само замечает исчерпанную квоту IP, выбирает следующий сервер из списка и перезапускает сервер. Смена адреса работает только когда серверов в подписке больше одного.",
+                    "While no account is connected and the subscription is on, the app notices a spent IP quota on its own, picks the next server from the list and restarts the server. Changing the address only works when the subscription has more than one server.",
+                ),
+                12f,
+                palette.faint,
+            ),
+            Ui.params(top = Ui.dp(this, 6), bottom = Ui.dp(this, 2)),
+        )
         card.action(tr("Импортировать HTTPS-подписку", "Import HTTPS subscription")) {
             Ui.input(this, tr("URL подписки (HTTPS)", "Subscription URL (HTTPS)"), "https://", app.prefs.vpnSubscriptionUrl) { address ->
                 if (!address.startsWith("https://", ignoreCase = true)) {
@@ -824,7 +761,6 @@ class SettingsActivity : Activity() {
                     app.paths.rootfsStamp.delete()
                     app.paths.profilesFile.delete()
                     runCatching { app.vpn.stop("erase all app data") }
-                    runCatching { app.warp.stop("erase all app data") }
                     // The dialog promises a full wipe; leftover prefs would silently restore remote mode, compat,
                     // banner state and the rest of it on the next launch.
                     app.prefs.clearAll()

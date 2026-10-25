@@ -171,7 +171,6 @@ function check(name, ok, detail) {
       buttonText: button && button.textContent,
       hintText: hint && hint.textContent,
       opened: window.calls.slice(callsBefore).some((c) => c[0] === "login"),
-      rotated: window.calls.some((c) => c[0] === "warp"),
       hintsWhileError,
       hintsAfterFix,
       hintsWhenBack,
@@ -182,7 +181,6 @@ function check(name, ok, detail) {
   // The page in this harness is English, so the offer follows the page language (the old label was hardcoded Russian).
   check("quota button text", quota.buttonText === "Connect account", String(quota.buttonText));
   check("quota button opens sign-in", quota.opened === true);
-  check("quota never asks for a WARP rotation", quota.rotated === false);
   check("one hint per error", quota.hintsWhileError === 1, JSON.stringify(quota));
   check("hint removed when the error is gone", quota.hintsAfterFix === 0, JSON.stringify(quota));
   check("hint returns when the limit returns", quota.hintsWhenBack === 1, JSON.stringify(quota));

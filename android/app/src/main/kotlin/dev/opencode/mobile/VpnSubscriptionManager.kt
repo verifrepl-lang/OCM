@@ -1,5 +1,6 @@
 package dev.opencode.mobile
 
+import android.content.Context
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
@@ -58,6 +59,24 @@ class VpnSubscriptionManager(private val paths: Paths, private val prefs: Prefs)
         prefs.vpnSelectedNode = node.key
     }
 
+    /**
+     * Moves the selection to the node after the current one (wrapping around), so the next [prepare] leaves through
+     * a different address. Null when there is nothing to rotate to; the current node itself is returned when it is
+     * the only one.
+     */
+    fun rotateToNext(): VpnSubscriptionParser.Node? {
+        val all = nodes()
+        if (all.isEmpty()) return null
+
+        val current = selectedNode()?.key
+        val next = all.dropWhile { it.key != current }.drop(1).firstOrNull()
+            ?: all.firstOrNull { it.key != current }
+            ?: all.first()
+
+        if (next.key != current) select(next.key)
+        return next
+    }
+
     /** Imports either a single link, a multi-link text block, or a base64 subscription body. */
     fun importText(text: String): Int {
         val imported = VpnSubscriptionParser.parseSubscriptionText(text)
@@ -68,6 +87,25 @@ class VpnSubscriptionManager(private val paths: Paths, private val prefs: Prefs)
             paths.vpnNodesFile.writeText(merged.joinToString("\n") { it.rawUri } + "\n", Charsets.UTF_8)
             if (merged.none { it.key == prefs.vpnSelectedNode }) prefs.vpnSelectedNode = imported.first().key
             return imported.size
+        }
+    }
+
+    /**
+     * Imports the node list this APK was built with (assets/vpn-default-nodes.txt, filled from repo secrets by CI),
+     * once, when no nodes were imported before. A person's own import always wins and is never overwritten.
+     */
+    fun seedDefaults(context: Context) {
+        synchronized(lock) {
+            if (paths.vpnNodesFile.exists() && paths.vpnNodesFile.length() > 0) return
+
+            val text = runCatching {
+                context.assets.open("vpn-default-nodes.txt").use { it.readBytes().toString(Charsets.UTF_8) }
+            }.getOrNull() ?: return
+
+            if (text.isBlank()) return
+
+            val count = importText(text)
+            if (count > 0) Log.i("vpn", "seeded $count default subscription node(s) from the build")
         }
     }
 

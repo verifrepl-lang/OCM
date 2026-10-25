@@ -35,6 +35,22 @@ Updates are OTA: the app checks the same Releases page and can update itself, th
 2. Open the **Actions** tab, pick **Build APK**, press **Run workflow**. Or push a tag like `v1.0.5` and the build starts on its own.
 3. In 40-90 minutes the **Releases** page has the APK. Add the `ANDROID_KEYSTORE_*` secrets to sign with your own key; otherwise the public development key from the repository is used.
 
+### Default VPN subscription (optional secret)
+
+The app can rotate the exit address when the anonymous per-IP quota is spent: it needs a VPN subscription (VLESS/Hysteria2 links) with **more than one server**. Your own links can be imported any time in Settings, Network. To bake a default list into the APK instead, add a repository secret under **Settings, Secrets and variables, Actions**:
+
+- `VPN_NODES_TEXT` - the links themselves, one per line:
+
+  ```
+  vless://uuid@host:443?...#Node-1
+  vless://uuid@host:443?...#Node-2
+  hysteria2://password@host:443?...#Node-3
+  ```
+
+- or `VPN_SUBSCRIPTION_URL` - an `https://` subscription URL the build downloads once (`VPN_NODES_TEXT` wins when both are set).
+
+Then run the build. The links land in the APK as `assets/vpn-default-nodes.txt`; the app imports them on first start and never overwrites anything you imported yourself. Anyone who can download the APK can read the links, so use a subscription you control and can revoke.
+
 ### How it works
 
 Inside the app an Ubuntu 24.04 (arm64) userland runs via `proot`, the original `opencode serve` runs in it, and the app shows the original OpenCode web interface in a WebView. No root required.

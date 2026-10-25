@@ -21,7 +21,7 @@ data class ProotConfig(
     val locale: String = "C.UTF-8",
     /** Host directory holding an over-the-air runtime build (`opencode` inside); null runs the bundled one. */
     val otaBinDir: String? = null,
-    /** Local HTTP proxy (the WARP tunnel) for the server's outbound traffic; null connects directly. */
+    /** Local HTTP proxy (a VPN subscription) for the server's outbound traffic; null connects directly. */
     val proxy: String? = null,
 )
 
@@ -29,6 +29,9 @@ data class Launch(val command: List<String>, val env: Map<String, String>)
 
 object ProotCommand {
     const val GUEST_BINARY = "/usr/local/bin/opencode"
+
+    /** Loopback traffic stays outside the outbound proxy: the web UI talks to the server directly. */
+    const val NO_PROXY = "127.0.0.1,localhost,0.0.0.0"
     const val GUEST_OTA_DIR = "/opt/opencode-ota"
     const val GUEST_INSTRUCTIONS = "/etc/opencode-android/AGENTS.md"
     const val GUEST_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -120,11 +123,11 @@ object ProotCommand {
             env["OPENCODE_FILEWATCHER_DISABLE"] = "1"
         }
 
-        // The WARP tunnel: everything the server sends to model providers leaves through Cloudflare. Local loopback
-        // traffic (the web UI to the server) must never touch the proxy, or the app would break without a tunnel.
+        // The proxy carries only the server's outbound traffic: local loopback traffic (the web UI to the server)
+        // must never touch it, or the app would break without a tunnel.
         if (!c.proxy.isNullOrEmpty()) {
             for (key in listOf("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")) env[key] = c.proxy
-            for (key in listOf("NO_PROXY", "no_proxy")) env[key] = Warp.NO_PROXY
+            for (key in listOf("NO_PROXY", "no_proxy")) env[key] = NO_PROXY
             // The server is a Node executable: its built-in fetch (every model request) ignores the variables above
             // unless this switch is on. Without it the tunnel would be up and carry nothing.
             env["NODE_USE_ENV_PROXY"] = "1"
