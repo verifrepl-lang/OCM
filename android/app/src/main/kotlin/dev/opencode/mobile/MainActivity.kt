@@ -31,7 +31,7 @@ class MainActivity : Activity(), UiHost {
     lateinit var keys: KeysBar
         private set
 
-    private val app: App get() = application as App
+    val app: App get() = application as App
 
     private lateinit var content: LinearLayout
     private lateinit var previewLayer: FrameLayout
@@ -39,6 +39,9 @@ class MainActivity : Activity(), UiHost {
     private lateinit var previews: PreviewManager
     private lateinit var handle: ImageView
     private lateinit var root: FrameLayout
+
+    /** The surface overlays (the update banner) are added to, above everything else. */
+    fun overlaySurface(): FrameLayout = root
 
     private var unsubscribe: (() -> Unit)? = null
     private var loadedGeneration = -1
@@ -107,6 +110,7 @@ class MainActivity : Activity(), UiHost {
         ServerService.send(this)
         unsubscribe = ServerState.listen { onState(it) }
 
+
         Log.setStage("Application active")
 
         // If Android refused to launch the crash screen while the previous process was dying, retry now that
@@ -148,6 +152,9 @@ class MainActivity : Activity(), UiHost {
         unsubscribe?.invoke()
 
         if (UiBus.host === this) UiBus.host = null
+
+        // The banner overlay died with this activity; let a fresh one show it again if it was never closed.
+        UpdateBanner.reset()
 
         previews.destroy()
         web.destroy()
@@ -194,6 +201,7 @@ class MainActivity : Activity(), UiHost {
                     loadedGeneration = s.generation
                     startup.loading()
                     web.open(s.baseUrl, currentPassword())
+
 
                     firstRun()
                 }
@@ -247,6 +255,11 @@ class MainActivity : Activity(), UiHost {
     // Page callbacks
     fun onPageReady() {
         if (ServerState.snapshot.phase == Phase.RUNNING) startup.hide()
+
+        // The emergency-update card appears once the person is actually looking at the interface.
+        if (UpdateBanner.shouldShow(this)) {
+            UpdateBanner.show(this) { }
+        }
     }
 
     fun onPageProgress(percent: Int) {
@@ -531,6 +544,8 @@ class MainActivity : Activity(), UiHost {
                 else tr("Подключить личный API-ключ", "Connect a personal API key")
             ) to { ApiKey.ask(this) }
 
+        items += tr("Коннекторы и модели", "Connectors and models") to { startActivity(Intent(this, ConnectorsActivity::class.java)) }
+        items += tr("Плагины и правила", "Plugins and rules") to { startActivity(Intent(this, PluginsActivity::class.java)) }
         items += tr("Открыть адрес в окне предпросмотра", "Open an address in a preview window") to {
             Ui.input(this, tr("Адрес или порт", "Address or port"), "localhost:5173") { value -> if (value.isNotEmpty()) showPreview(value) }
         }

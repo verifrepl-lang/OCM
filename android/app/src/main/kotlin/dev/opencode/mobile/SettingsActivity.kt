@@ -12,6 +12,8 @@ import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
 import java.io.File
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.text.DateFormat
 import java.util.Date
 
@@ -22,6 +24,9 @@ class SettingsActivity : Activity() {
     private lateinit var column: LinearLayout
     private var unsubscribeState: (() -> Unit)? = null
     private var unsubscribeUpdates: (() -> Unit)? = null
+    private var networkIpStatus = tr("Нажми «Обновить IP и геолокацию», чтобы проверить текущий маршрут.", "Tap Refresh IP and location to check the current route.")
+    private var dnsTestStatus = tr("DNS-тесты выключены. Включи их, чтобы вручную проверить резолверы.", "DNS tests are off. Enable them to check resolvers manually.")
+    private var networkTaskActive = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -124,6 +129,8 @@ class SettingsActivity : Activity() {
         column.removeAllViews()
 
         profilesSection()
+        networkSection()
+        extensionsSection()
         serverSection()
         updatesSection()
         permissionsSection()
@@ -162,12 +169,286 @@ class SettingsActivity : Activity() {
             card.line(profile.title, subtitle, badge) {
                 profileMenu(profile)
             }
+
+            // A profile without an account rides the shared anonymous pool: one heavy user anywhere drains it for
+            // everyone. The way out is a personal account, so say so right where the empty state is.
+            if (current && profile.account == null) {
+                card.addView(
+                    Ui.text(
+                        this,
+                        tr(
+                            "Без своего аккаунта лимиты бесплатных моделей считаются по IP-адресу и общие для всех, кто сидит на нём. Подключите Gmail — квота станет вашей личной. Аккаунт, созданный в браузере, начнёт работать только после входа в приложении.",
+                            "Without your own account the free-model limits are counted per IP address and shared with everyone behind it. Connect Gmail to get a quota of your own. An account created in a browser only works after signing in inside the app.",
+                        ),
+                        12f,
+                        palette.faint,
+                    ),
+                    Ui.params(bottom = Ui.dp(this, 8)),
+                )
+            }
+            // The active profile's Console session is what decides whose quota the server spends. Signing out is the only
+            // way to stop using an exhausted account; a new account created anywhere else does nothing until this happens.
+            if (current) card.action(tr("Выйти из аккаунта", "Sign out of the account"), danger = true) { signOut() }
         }
 
         card.divide()
         card.action(tr("Добавить профиль", "Add a profile"), primary = true) { addProfile() }
         card.action(tr("Добавить ещё один аккаунт в этот профиль", "Add another account to this profile")) {
             startActivity(Intent(this, LoginActivity::class.java))
+        }
+    }
+
+    /** Current egress and DNS diagnostics live in Settings, separate from the floating shortcut menu. */
+    private fun diagnosticsProxy(): Proxy? = app.vpn.proxy()
+
+    private fun networkSection() {
+        val card = section(tr("Сеть, IP и VPN", "Network, IP and VPN"))
+        card.addView(
+            Ui.text(
+                this,
+                tr(
+                    "Проверка IP выполняется только по нажатию. Для города и региона IP отправляется в ipwho.is; DNS-тесты проверяют доступность трёх DoH-серверов, но не меняют DNS Android и по умолчанию выключены.",
+                    "IP lookup runs only when requested. The public IP is sent to ipwho.is for city and region data; DNS tests check three DoH resolvers but do not change Android DNS and are off by default.",
+                ),
+                12f,
+                palette.muted,
+            ),
+            Ui.params(bottom = Ui.dp(this, 8)),
+        )
+        card.line(tr("Текущий публичный IP и расположение", "Current public IP and location"), networkIpStatus)
+        card.action(tr("Обновить IP и геолокацию", "Refresh IP and location"), primary = true) {
+            if (networkTaskActive) return@action
+            networkTaskActive = true
+            networkIpStatus = tr("Проверяю текущий маршрут...", "Checking the current route...")
+            render()
+            val proxy = diagnosticsProxy()
+            Thread({
+                val result = NetworkDiagnostics.currentIpLocationText(proxy)
+                runOnUiThread {
+                    networkIpStatus = result
+                    networkTaskActive = false
+                    render()
+                }
+            }, "network-ip-check").apply { isDaemon = true; start() }
+        }
+
+        card.divide()
+        card.toggle(
+            tr("Разрешить ручной DNS-тест", "Enable manual DNS tests"),
+            tr("По умолчанию выключено. Проверяет DNS-over-HTTPS, не меняя системные DNS-настройки.", "Off by default. Tests DNS-over-HTTPS without changing system DNS settings."),
+            app.prefs.dnsDiagnosticsEnabled,
+        ) { enabled ->
+            app.prefs.dnsDiagnosticsEnabled = enabled
+            dnsTestStatus = if (enabled) tr("Готово к проверке. Нажми кнопку ниже.", "Ready. Press the test button below.") else tr("DNS-тесты выключены.", "DNS tests are disabled.")
+            render()
+        }
+        card.addView(
+            Ui.text(
+                this,
+                "Cloudflare · cloudflare-dns.com\nGoogle Public DNS · dns.google\nAdGuard DNS · dns.adguard-dns.com",
+                12f,
+                palette.faint,
+            ),
+            Ui.params(top = Ui.dp(this, 5), bottom = Ui.dp(this, 5)),
+        )
+        card.action(tr("Проверить DNS-серверы", "Test DNS resolvers")) {
+            if (!app.prefs.dnsDiagnosticsEnabled) {
+                Ui.toast(this, tr("Сначала включи ручной DNS-тест", "Enable manual DNS tests first"))
+                return@action
+            }
+            if (networkTaskActive) return@action
+            networkTaskActive = true
+            dnsTestStatus = tr("Проверяю резолверы...", "Testing resolvers...")
+            render()
+            val proxy = diagnosticsProxy()
+            Thread({
+                val report = NetworkDiagnostics.testDns(proxy).joinToString("\n") { it.display() }
+                runOnUiThread {
+                    dnsTestStatus = report
+                    networkTaskActive = false
+                    render()
+                }
+            }, "network-dns-check").apply { isDaemon = true; start() }
+        }
+        card.addView(Ui.text(this, dnsTestStatus, 12f, palette.muted), Ui.params(top = Ui.dp(this, 6)))
+        card.addView(
+            Ui.text(
+                this,
+                tr(
+                    "Если DNS доступен, а сайты всё равно не открываются, причина может быть в маршрутизации, TLS, блокировке провайдера или самом сервисе — один DNS-тест это не исправляет.",
+                    "Working DNS does not guarantee site access: routing, TLS, ISP filtering or the service itself may still cause errors.",
+                ),
+                12f,
+                palette.faint,
+            ),
+            Ui.params(top = Ui.dp(this, 6)),
+        )
+
+        card.divide()
+        card.toggle(
+            tr("Использовать VPN-подписку", "Use VPN subscription"),
+            tr("VLESS/Hysteria2 через sing-box только для локального OpenCode-сервера. По умолчанию выключено.", "VLESS/Hysteria2 via sing-box for the local OpenCode server only. Off by default."),
+            app.prefs.vpnSubscriptionEnabled,
+        ) { enabled ->
+            if (enabled && app.prefs.remote) {
+                Ui.toast(this, tr("VPN-подписка применяется только к локальному серверу", "VPN subscriptions apply only to the local server"))
+                render()
+                return@toggle
+            }
+            if (enabled && app.vpn.nodes().isEmpty()) {
+                Ui.toast(this, tr("Сначала импортируй подписку или ссылку сервера", "Import a subscription or server link first"))
+                render()
+                return@toggle
+            }
+            app.prefs.vpnSubscriptionEnabled = enabled
+            if (!enabled) app.vpn.stop("VPN subscription disabled")
+            if (!app.prefs.remote && ServerState.snapshot.phase == Phase.RUNNING) {
+                Ui.toast(this, tr("Перезапускаю локальный сервер для применения маршрута...", "Restarting the local server to apply the route..."))
+                ServerService.send(this, ServerService.ACTION_RESTART)
+            }
+            render()
+        }
+        val vpnStatus = app.vpn.status
+        val vpnLabel = when (vpnStatus.phase) {
+            VpnSubscriptionManager.Phase.OFF -> tr("Отключён", "Off")
+            VpnSubscriptionManager.Phase.PREPARING -> tr("Подключается...", "Connecting...")
+            VpnSubscriptionManager.Phase.RUNNING -> tr("Подключён", "Connected")
+            VpnSubscriptionManager.Phase.FAILED -> tr("Ошибка", "Failed")
+        }
+        card.line(tr("Состояние VPN-подписки", "Subscription VPN status"), listOf(vpnLabel, vpnStatus.selected, vpnStatus.detail).filter { it.isNotBlank() }.distinct().joinToString(" · "), state(vpnLabel, vpnStatus.phase == VpnSubscriptionManager.Phase.RUNNING))
+        card.addView(
+            Ui.text(
+                this,
+                tr(
+                    "Пока аккаунт не подключён и включена подписка, приложение само замечает исчерпанную квоту IP, выбирает следующий сервер из списка и перезапускает сервер. Смена адреса работает только когда серверов в подписке больше одного.",
+                    "While no account is connected and the subscription is on, the app notices a spent IP quota on its own, picks the next server from the list and restarts the server. Changing the address only works when the subscription has more than one server.",
+                ),
+                12f,
+                palette.faint,
+            ),
+            Ui.params(top = Ui.dp(this, 6), bottom = Ui.dp(this, 2)),
+        )
+        card.action(tr("Импортировать HTTPS-подписку", "Import HTTPS subscription")) {
+            Ui.input(this, tr("URL подписки (HTTPS)", "Subscription URL (HTTPS)"), "https://", app.prefs.vpnSubscriptionUrl) { address ->
+                if (!address.startsWith("https://", ignoreCase = true)) {
+                    Ui.toast(this, tr("Разрешены только HTTPS-ссылки подписки", "Only HTTPS subscription URLs are allowed"))
+                    return@input
+                }
+                app.prefs.vpnSubscriptionUrl = address
+                Ui.toast(this, tr("Загружаю подписку...", "Downloading the subscription..."))
+                Thread({
+                    val outcome = runCatching { app.vpn.importSubscription(address) }
+                    runOnUiThread {
+                        outcome.onSuccess { count -> Ui.toast(this, tr("Импортировано серверов: $count", "Imported servers: $count")) }
+                            .onFailure { Ui.toast(this, tr("Импорт не удался: ${it.message}", "Import failed: ${it.message}")) }
+                        render()
+                    }
+                }, "vpn-subscription-import").apply { isDaemon = true; start() }
+            }
+        }
+        card.action(tr("Добавить VLESS/Hysteria2-ссылку", "Add a VLESS/Hysteria2 link")) {
+            Ui.input(this, tr("Ссылка или текст подписки", "Link or subscription text"), "vless://... hysteria2://...", "") { content ->
+                val outcome = runCatching { app.vpn.importText(content) }
+                outcome.onSuccess { count -> Ui.toast(this, tr("Импортировано серверов: $count", "Imported servers: $count")) }
+                    .onFailure { Ui.toast(this, tr("Не удалось разобрать: ${it.message}", "Could not parse: ${it.message}")) }
+                render()
+            }
+        }
+
+        val nodes = app.vpn.nodes()
+        card.line(tr("Серверы в подписке", "Servers in subscription"), tr("Всего: ${nodes.size}; поддерживаются VLESS и Hysteria2", "Total: ${nodes.size}; VLESS and Hysteria2 are supported"))
+        val selectedKey = app.prefs.vpnSelectedNode
+        if (nodes.isNotEmpty()) card.action(tr("Выбрать сервер из всей подписки", "Choose from all subscription servers")) {
+            Ui.choose(this, tr("VPN-серверы", "VPN servers"), nodes.map { "${it.name} (${it.protocol} · ${it.host}:${it.port})" }) { index ->
+                app.vpn.select(nodes[index].key)
+                if (app.prefs.vpnSubscriptionEnabled && !app.prefs.remote && ServerState.snapshot.phase == Phase.RUNNING) {
+                    ServerService.send(this, ServerService.ACTION_RESTART)
+                }
+                render()
+            }
+        }
+        for (node in nodes.take(12)) {
+            val selected = node.key == selectedKey || (selectedKey.isBlank() && node == nodes.firstOrNull())
+            card.line(node.name, "${node.protocol} · ${node.host}:${node.port}", state(if (selected) tr("Выбран", "Selected") else tr("Выбрать", "Select"), selected)) {
+                app.vpn.select(node.key)
+                if (app.prefs.vpnSubscriptionEnabled && !app.prefs.remote && ServerState.snapshot.phase == Phase.RUNNING) {
+                    ServerService.send(this, ServerService.ACTION_RESTART)
+                }
+                render()
+            }
+        }
+        if (nodes.size > 12) card.addView(Ui.text(this, tr("Показаны первые 12 серверов. Остальные сохранены.", "Showing the first 12 servers. The others are saved."), 12f, palette.faint), Ui.params(top = Ui.dp(this, 5)))
+        card.action(tr("Проверить выбранный VPN-сервер", "Test the selected VPN server")) {
+            if (!app.prefs.vpnSubscriptionEnabled) {
+                Ui.toast(this, tr("Включи VPN-подписку, чтобы подключить и проверить сервер", "Enable the VPN subscription to connect and test a server"))
+                return@action
+            }
+            if (networkTaskActive) return@action
+            networkTaskActive = true
+            networkIpStatus = tr("Подключаю выбранный сервер и проверяю внешний IP...", "Connecting and checking the egress IP...")
+            render()
+            Thread({
+                val result = runCatching {
+                    val address = app.vpn.prepare()
+                    val port = address?.substringAfterLast(':')?.toIntOrNull() ?: VpnSubscriptionManager.PORT
+                    val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", port))
+                    NetworkDiagnostics.currentIpLocationText(proxy)
+                }.getOrElse { tr("Проверка не удалась", "Test failed") + ": " + (it.message ?: it.javaClass.simpleName) }
+                runOnUiThread {
+                    networkIpStatus = result
+                    networkTaskActive = false
+                    render()
+                }
+            }, "vpn-node-test").apply { isDaemon = true; start() }
+        }
+    }
+
+    /**
+     * Disconnects the Console account the active profile is signed in with: the stored OAuth session is wiped from
+     * auth.json, the server restarts so no old token stays in memory, and the person is offered to sign in with a
+     * different account at once. Pasted API keys (connectors) are kept.
+     */
+    private fun signOut() {
+        val active = app.profiles.active
+        val who = active.account
+
+        Ui.confirm(
+            this,
+            tr("Выйти из аккаунта", "Sign out of the account"),
+            if (who == null) {
+                tr(
+                    "Сервер забудет сохранённый вход, и его квота перестанет действовать. Ключи коннекторов сохранятся, сервер перезапустится.",
+                    "The server will forget the stored sign-in and its quota will stop applying. Connector keys are kept, the server restarts.",
+                )
+            } else {
+                tr(
+                    "Аккаунт $who отключится: его квота и модели Zen перестанут работать. Ключи коннекторов сохранятся, сервер перезапустится.",
+                    "The account $who will be disconnected: its quota and Zen models stop working. Connector keys are kept, the server restarts.",
+                )
+            },
+            tr("Выйти", "Sign out"),
+        ) {
+            val home = Profiles.homeDir(app.paths.profilesDir, active)
+
+            // Write auth.json synchronously BEFORE the restart: the fresh server must not read the old session back,
+            // or the account would reappear from the still-valid tokens and the sign-out would look like a no-op.
+            runCatching { OpencodeStore.signOut(home) }
+            app.prefs.signedIn = false
+            app.profiles.setAccount(active.id, null)
+            app.prefs.loginSkipped = true
+            ServerService.send(this, ServerService.ACTION_RESTART)
+            Ui.toast(this, tr("Аккаунт отключён", "Account signed out"))
+            render()
+
+            Ui.confirm(
+                this,
+                tr("Войти другим аккаунтом", "Sign in with another account"),
+                tr(
+                    "Откроется вход через Google в чистом окне - войдите тем аккаунтом, чья квота нужна. Без этого приложение продолжит работать без квоты.",
+                    "Google sign-in opens in a clean window - sign in with the account whose quota you need. Otherwise the app keeps working without a quota.",
+                ),
+                tr("Войти", "Sign in"),
+            ) { startActivity(Intent(this, LoginActivity::class.java)) }
         }
     }
 
@@ -259,6 +540,26 @@ class SettingsActivity : Activity() {
                 render()
             }
         }
+    }
+
+    private fun extensionsSection() {
+        val card = section(tr("Коннекторы и плагины", "Connectors and plugins"))
+
+        card.line(
+            tr("Коннекторы", "Connectors"),
+            tr("Ключи провайдеров и своё API", "Provider keys and custom APIs"),
+            null,
+        ) { startActivity(Intent(this, ConnectorsActivity::class.java)) }
+        card.line(
+            tr("Плагины", "Plugins"),
+            tr("Из файлов, по ссылкам и npm", "From files, links and npm"),
+            null,
+        ) { startActivity(Intent(this, PluginsActivity::class.java)) }
+        card.line(
+            tr("Правила (README.md)", "Rules (README.md)"),
+            tr("Инструкции для всех моделей или для одной", "Instructions for all models or for one"),
+            null,
+        ) { startActivity(Intent(this, RulesActivity::class.java)) }
     }
 
     private fun serverSection() {
@@ -480,8 +781,13 @@ class SettingsActivity : Activity() {
                     Fs.deleteTree(app.paths.profilesDir)
                     Fs.deleteTree(app.paths.rootfs)
                     Fs.deleteTree(app.paths.ota)
+                    Fs.deleteTree(app.paths.networkDir)
                     app.paths.rootfsStamp.delete()
                     app.paths.profilesFile.delete()
+                    runCatching { app.vpn.stop("erase all app data") }
+                    // The dialog promises a full wipe; leftover prefs would silently restore remote mode, compat,
+                    // banner state and the rest of it on the next launch.
+                    app.prefs.clearAll()
                     runOnUiThread { finishAffinity() }
                 }.apply { isDaemon = true }.start()
             }

@@ -1,0 +1,44 @@
+diff --git a/packages/app/src/components/prompt-input-v2.tsx b/packages/app/src/components/prompt-input-v2.tsx
+index 481b792..f8e58d0 100644
+--- a/packages/app/src/components/prompt-input-v2.tsx
++++ b/packages/app/src/components/prompt-input-v2.tsx
+@@ -517,7 +517,7 @@ function PromptInputV2ModelControl(props: {
+               data-control-type="dialog"
+               variant="ghost-muted"
+               size="normal"
+-              class="min-w-0 max-w-[220px] justify-start ![font-weight:440] group"
++              class="min-w-0 max-w-[220px] max-sm:max-w-[150px] justify-start ![font-weight:440] group"
+               classList={{ "animate-in fade-in": shouldAnimate() }}
+               style={{ height: "28px" }}
+               onClick={props.onUnpaidClick}
+@@ -534,7 +534,7 @@ function PromptInputV2ModelControl(props: {
+                 variant="ghost-muted"
+                 size="normal"
+                 style={{ height: "28px" }}
+-                class="min-w-0 max-w-[220px] justify-start ![font-weight:440] group"
++                class="min-w-0 max-w-[220px] max-sm:max-w-[150px] justify-start ![font-weight:440] group"
+                 classList={{ "animate-in fade-in": shouldAnimate() }}
+                 data-action="prompt-model"
+                 data-control-type="popover"
+diff --git a/packages/session-ui/src/v2/components/prompt-input/index.tsx b/packages/session-ui/src/v2/components/prompt-input/index.tsx
+index ff4ff0f..9695bfe 100644
+--- a/packages/session-ui/src/v2/components/prompt-input/index.tsx
++++ b/packages/session-ui/src/v2/components/prompt-input/index.tsx
+@@ -197,7 +197,7 @@ export function PromptInputV2(props: PromptInputV2Props) {
+ 
+         <div class="flex h-11 items-center px-2">
+           <div
+-            class="flex min-w-0 flex-1 items-center gap-1"
++            class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto no-scrollbar"
+             aria-hidden={state.mode === "shell"}
+             inert={state.mode === "shell" ? true : undefined}
+             style={buttons()}
+@@ -573,7 +573,7 @@ export function PromptInputV2Select(props: {
+           as={ButtonV2}
+           variant="ghost-muted"
+           size="normal"
+-          class={`max-w-[220px] justify-start ![font-weight:440] ${props.class ?? ""}`}
++          class={`max-w-[220px] min-w-0 max-sm:max-w-[150px] justify-start ![font-weight:440] ${props.class ?? ""}`}
+           aria-label={props.title}
+         >
+           {props.currentIcon}

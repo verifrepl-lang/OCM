@@ -1,0 +1,92 @@
+package dev.opencode.mobile
+
+import android.view.Gravity
+import android.view.View
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.TextView
+
+/**
+ * The one-time card that greets a fresh install after the interface appears: what this emergency update changes. The
+ * person closes it with the corner cross, a tap on the dark backdrop, or Back; it never comes back afterwards.
+ */
+object UpdateBanner {
+    private const val SEEN_KEY = "update_110"
+
+    /** Guards against a second copy stacking over the first one when the page reports being ready again. */
+    private var active = false
+
+    fun shouldShow(activity: MainActivity): Boolean = !active && !activity.app.prefs.seen(SEEN_KEY)
+
+    /** Builds the overlay over everything else; [close] runs when it goes away for any reason. */
+    fun show(activity: MainActivity, close: () -> Unit) {
+        if (active) return
+
+        active = true
+
+        val palette = activity.palette
+        val scrim = FrameLayout(activity).apply {
+            setBackgroundColor(palette.scrim)
+            tag = SCRIM_TAG
+        }
+        val card = Ui.vertical(activity).apply {
+            background = Ui.rounded(activity, palette.bg, 20f, palette.border)
+            setPadding(Ui.dp(activity, 16), Ui.dp(activity, 12), Ui.dp(activity, 16), Ui.dp(activity, 18))
+        }
+
+        fun dismiss() {
+            active = false
+            activity.app.prefs.markSeen(SEEN_KEY)
+            (scrim.parent as? FrameLayout)?.removeView(scrim)
+            close()
+        }
+
+        // Header: the title on the left, the cross on the right.
+        val header = Ui.horizontal(activity)
+        header.addView(
+            Ui.text(activity, tr("ОБНОВЛЕНИЕ 1.0.10", "UPDATE 1.0.10"), 16f, palette.text, bold = true),
+            Ui.params(0, Ui.WRAP, weight = 1f),
+        )
+        header.addView(Ui.iconButton(activity, R.drawable.ic_close, tr("Закрыть", "Close"), palette, tint = palette.muted, sizeDp = 36) { dismiss() })
+        card.addView(header, Ui.params(Ui.MATCH, Ui.WRAP, bottom = Ui.dp(activity, 12)))
+
+        card.addView(Ui.text(activity, tr("Что изменено:", "What changed:"), 14f, palette.text, bold = true), Ui.params(bottom = Ui.dp(activity, 6)))
+
+        for (line in listOf(
+            tr("- WARP убран. Вместо него - VPN-подписка (VLESS/Hysteria2 через sing-box): импортируй ссылку в Настройках, Сеть", "- WARP is gone. In its place is a VPN subscription (VLESS/Hysteria2 via sing-box): import a link in Settings, Network"),
+            tr("- без подключённого аккаунта приложение само замечает исчерпанную квоту IP, меняет адрес через подписку и перезапускает сервер", "- without a connected account the app notices a spent IP quota on its own, switches the address via the subscription and restarts the server"),
+            tr("- вернулись старые пути проектов: папка Проекты из памяти телефона снова в списке с первого запуска", "- the old project paths are back: the phone's storage Projects folder is in the list from the first launch"),
+            tr("- починен выбор уровня мышления: он больше не уезжает под кнопку отправки на узком экране", "- fixed the thinking-level control: it no longer slides under the send button on a narrow screen"),
+            tr("- подтверждение разрешения больше не падает с ошибкой Permission request not found", "- approving a permission no longer fails with Permission request not found"),
+        )) {
+            card.addView(Ui.text(activity, line, 14f, palette.muted), Ui.params(bottom = Ui.dp(activity, 3)))
+        }
+
+        card.addView(
+            Ui.text(activity, tr("Нажмите на крестик, чтобы продолжить.", "Tap the cross to continue."), 12f, palette.faint),
+            Ui.params(top = Ui.dp(activity, 8)),
+        )
+
+        scrim.addView(card, FrameLayout.LayoutParams(Ui.MATCH, Ui.WRAP).apply {
+            gravity = Gravity.CENTER
+            setMargins(Ui.dp(activity, 20), Ui.dp(activity, 24), Ui.dp(activity, 20), Ui.dp(activity, 24))
+        })
+
+        // A tap on the dark backdrop also closes; touches on the card itself do not.
+        scrim.setOnClickListener { dismiss() }
+        card.isClickable = true
+        card.setOnClickListener { }
+
+        activity.overlaySurface().addView(
+            scrim,
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT),
+        )
+    }
+
+    /** A leftover banner from a rebuilt page never survives a new instance of the activity. */
+    fun reset() {
+        active = false
+    }
+
+    private const val SCRIM_TAG = "update_banner_scrim"
+}

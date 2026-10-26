@@ -65,6 +65,18 @@ class JsBridge(private val activity: MainActivity) {
     @JavascriptInterface
     fun guestState(): String = if (hasAccount()) "personal" else "anonymous"
 
+    /**
+     * The email of the Console account the active profile is signed in with, or an empty string. The web UI shows it
+     * in a small chip, so the sign-in state is visible instead of something only limit errors talk about. Read on
+     * the WebView's thread: the profiles list is an in-memory read.
+     */
+    @JavascriptInterface
+    fun accountLabel(): String {
+        val app = activity.applicationContext as App
+
+        return app.profiles.active.account ?: ""
+    }
+
     /** The sign-in offer shown instead of a raw quota error opens the native sign-in screen. */
     @JavascriptInterface
     fun openLogin() {

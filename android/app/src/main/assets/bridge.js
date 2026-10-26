@@ -21,7 +21,13 @@
     var url = createObjectURL.call(URL, object);
 
     try {
-      if (object instanceof Blob) blobs.set(url, object);
+      if (object instanceof Blob) {
+        // A page that never revokes its URLs would otherwise pin every blob until the renderer dies (a renderer
+        // kill mid-chat reads to the person as "the agent thought forever, then an error").
+        if (blobs.size > 24) blobs.delete(blobs.keys().next().value);
+
+        blobs.set(url, object);
+      }
     } catch (e) {}
 
     return url;
@@ -277,6 +283,16 @@
     }
   }
 
+  // The email the active profile is signed in with, as the native side knows it. Empty when there is none (or the
+  // app build predates the method), so every caller must treat it as decorative, never as a gate.
+  function accountLabel() {
+    try {
+      return String((native.accountLabel && native.accountLabel()) || "");
+    } catch (e) {
+      return "";
+    }
+  }
+
   function makeSignInButton(isRussian) {
     var button = document.createElement("button");
 
@@ -332,16 +348,16 @@
       body = isRussian
         ? "\u041c\u043e\u0434\u0435\u043b\u044c \u043d\u0435 \u043e\u0431\u0441\u043b\u0443\u0436\u0438\u0432\u0430\u0435\u0442\u0441\u044f \u0432 \u0432\u0430\u0448\u0435\u0439 \u0441\u0442\u0440\u0430\u043d\u0435 - \u044d\u0442\u043e \u043e\u0433\u0440\u0430\u043d\u0438\u0447\u0435\u043d\u0438\u0435 \u0441\u0435\u0440\u0432\u0435\u0440\u0430, \u0430\u043a\u043a\u0430\u0443\u043d\u0442 \u0435\u0433\u043e \u043d\u0435 \u0441\u043d\u0438\u043c\u0430\u0435\u0442. \u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0434\u0440\u0443\u0433\u0443\u044e \u043c\u043e\u0434\u0435\u043b\u044c."
         : "The model is not served in your country - a server-side restriction no account removes. Pick another model.";
-    } else if (/freeusagelimit|free\s+usage|free[\s_-]?(?:usage|tier)/i.test(text)) {
-      // The same free-usage error means different things for the two guest states: the world-shared bucket for an
+    } else if (/freeusagelimit|free\s+usage|free[\s_-]?(?:usage|tier)|insufficient[_ ]?quota|quota\s*(?:exceeded|exhausted|is exhausted|has been exceeded)|usage[\s_-]?limit|(?:credit|credits?|tokens?)\s*(?:exhausted|used up)/i.test(text)) {
+      // The same quota answer means different things for the two guest states: the world-shared bucket for an
       // anonymous profile, the personal allowance for one that runs its own account.
       body = personal
         ? (isRussian
             ? "\u042d\u0442\u043e \u043b\u0438\u043c\u0438\u0442 \u0432\u0430\u0448\u0435\u0433\u043e \u043b\u0438\u0447\u043d\u043e\u0433\u043e \u0430\u043a\u043a\u0430\u0443\u043d\u0442\u0430, \u0430 \u043d\u0435 \u043e\u0431\u0449\u0438\u0439. \u041f\u043e\u0434\u043e\u0436\u0434\u0438\u0442\u0435 \u0441\u0431\u0440\u043e\u0441\u0430, \u0432\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0434\u0440\u0443\u0433\u0443\u044e \u043c\u043e\u0434\u0435\u043b\u044c \u0438\u043b\u0438 \u043f\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435 \u043f\u043b\u0430\u043d \u0432 OpenCode."
             : "This is your personal account's limit, not the shared one. Wait for the reset, pick another model, or top up your OpenCode plan.")
         : (isRussian
-            ? "\u0411\u0435\u0437 \u0441\u0432\u043e\u0435\u0433\u043e \u043a\u043b\u044e\u0447\u0430 \u0431\u0435\u0441\u043f\u043b\u0430\u0442\u043d\u044b\u0435 \u043c\u043e\u0434\u0435\u043b\u0438 - \u043e\u0431\u0449\u0438\u0439 \u043b\u0438\u043c\u0438\u0442 \u043d\u0430 \u0432\u0441\u0435\u0445 \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0435\u0439 OpenCode \u0432 \u043c\u0438\u0440\u0435, \u0438 \u043e\u043d \u043e\u0431\u044b\u0447\u043d\u043e \u0443\u0436\u0435 \u0438\u0441\u0447\u0435\u0440\u043f\u0430\u043d. \u0421\u0432\u043e\u0439 \u043b\u0438\u043c\u0438\u0442 \u0434\u0430\u0451\u0442 \u043b\u0438\u0447\u043d\u044b\u0439 \u0430\u043a\u043a\u0430\u0443\u043d\u0442 \u0438\u043b\u0438 \u043f\u0435\u0440\u0441\u043e\u043d\u0430\u043b\u044c\u043d\u044b\u0439 API-\u043a\u043b\u044e\u0447: \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u0435 \u043b\u044e\u0431\u043e\u0439 \u043a\u043d\u043e\u043f\u043a\u043e\u0439 \u043d\u0438\u0436\u0435."
-            : "Without a key of your own the free models share one limit across all OpenCode users worldwide, and it is usually spent already. A personal account or a personal API key brings a limit of your own: connect either with the button below.");
+            ? "\u0411\u0435\u0437 \u0441\u0432\u043e\u0435\u0433\u043e \u043a\u043b\u044e\u0447\u0430 \u0431\u0435\u0441\u043f\u043b\u0430\u0442\u043d\u044b\u0435 \u043c\u043e\u0434\u0435\u043b\u0438 - \u043e\u0431\u0449\u0438\u0439 \u043b\u0438\u043c\u0438\u0442 \u043d\u0430 \u0432\u0441\u0435\u0445 \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0435\u0439 OpenCode \u0432 \u043c\u0438\u0440\u0435, \u0438 \u043e\u043d \u043e\u0431\u044b\u0447\u043d\u043e \u0443\u0436\u0435 \u0438\u0441\u0447\u0435\u0440\u043f\u0430\u043d. \u0421\u0432\u043e\u0439 \u043b\u0438\u043c\u0438\u0442 \u0434\u0430\u0451\u0442 \u043b\u0438\u0447\u043d\u044b\u0439 \u0430\u043a\u043a\u0430\u0443\u043d\u0442 \u0438\u043b\u0438 \u043f\u0435\u0440\u0441\u043e\u043d\u0430\u043b\u044c\u043d\u044b\u0439 API-\u043a\u043b\u044e\u0447: \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u0435 \u043b\u044e\u0431\u043e\u0439 \u043a\u043d\u043e\u043f\u043a\u043e\u0439 \u043d\u0438\u0436\u0435. \u0412\u0445\u043e\u0434 \u0447\u0435\u0440\u0435\u0437 Google \u043d\u0430 \u0441\u0430\u043c\u043e\u043c \u0441\u0430\u0439\u0442\u0435 \u043d\u0435 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0430\u0435\u0442 \u0430\u043a\u043a\u0430\u0443\u043d\u0442 \u043a \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u044e - \u043d\u0430\u0436\u043c\u0438\u0442\u0435 \u043a\u043d\u043e\u043f\u043a\u0443 \u043d\u0438\u0436\u0435 \u0438 \u0432\u043e\u0439\u0434\u0438\u0442\u0435 \u0437\u0434\u0435\u0441\u044c."
+            : "Without a key of your own the free models share one limit across all OpenCode users worldwide, and it is usually spent already. A personal account or a personal API key brings a limit of your own: connect either with the button below. Signing in with Google on the website does not connect the account to the app - tap the button below and sign in here.");
     } else {
       body = isRussian
         ? "\u0421\u043b\u0438\u0448\u043a\u043e\u043c \u043c\u043d\u043e\u0433\u043e \u0437\u0430\u043f\u0440\u043e\u0441\u043e\u0432 \u043f\u043e\u0434\u0440\u044f\u0434. \u041f\u043e\u0434\u043e\u0436\u0434\u0438\u0442\u0435 \u043d\u0435\u043c\u043d\u043e\u0433\u043e \u0438 \u043f\u043e\u043f\u0440\u043e\u0431\u0443\u0439\u0442\u0435 \u0441\u043d\u043e\u0432\u0430, \u043b\u0438\u0431\u043e \u0432\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0434\u0440\u0443\u0433\u0443\u044e \u043c\u043e\u0434\u0435\u043b\u044c."
@@ -418,6 +434,50 @@
       }
     } catch (e) {}
   }
+
+  // The page itself never says which account (if any) the server spends quota from, and the mistake of linking
+  // Google only on the website looks exactly like a working sign-in until a limit error explains otherwise. Show
+  // the connected account once per page load, for a few seconds, with the email the app knows.
+  function showAccountChip() {
+    if (document.querySelector("[data-oc-account]")) return;
+
+    var label = accountLabel();
+
+    if (!label) return;
+
+    var isRussian = (document.documentElement.lang || navigator.language || "").toLowerCase().indexOf("ru") === 0;
+    var chip = document.createElement("div");
+
+    chip.setAttribute("data-oc-account", "1");
+    chip.style.cssText =
+      "position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:2147483000;max-width:78%;" +
+      "padding:8px 14px;border-radius:12px;background:rgba(22,22,22,.92);color:#fafafa;font-size:12.5px;" +
+      "font-family:inherit;box-shadow:0 2px 10px rgba(0,0,0,.25);opacity:0;transition:opacity .4s;" +
+      "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer";
+    chip.textContent = isRussian ? "\u041e\u0442\u043a\u0440\u044b\u0442 \u0430\u043a\u043a\u0430\u0443\u043d\u0442: " + label : "Signed in as: " + label;
+    chip.addEventListener(
+      "click",
+      function () {
+        chip.remove();
+      },
+      true,
+    );
+
+    (document.body || document.documentElement).appendChild(chip);
+    requestAnimationFrame(function () {
+      chip.style.opacity = "1";
+    });
+
+    setTimeout(function () {
+      chip.style.opacity = "0";
+
+      setTimeout(function () {
+        chip.remove();
+      }, 450);
+    }, 8000);
+  }
+
+  setTimeout(showAccountChip, 1200);
 
   // Nodes touched by mutations: scanned directly, so an error far down a long chat is seen at once instead of
   // being cut off by the full-scan guard.

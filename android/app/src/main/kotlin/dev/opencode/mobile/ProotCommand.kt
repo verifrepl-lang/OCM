@@ -21,6 +21,8 @@ data class ProotConfig(
     val locale: String = "C.UTF-8",
     /** Host directory holding an over-the-air runtime build (`opencode` inside); null runs the bundled one. */
     val otaBinDir: String? = null,
+    /** Local HTTP proxy (a VPN subscription) for the server's outbound traffic; null connects directly. */
+    val proxy: String? = null,
     /** The profile's own Zen API key; null keeps the upstream default (the shared anonymous token). */
     val zenApiKey: String? = null,
 )
@@ -29,6 +31,9 @@ data class Launch(val command: List<String>, val env: Map<String, String>)
 
 object ProotCommand {
     const val GUEST_BINARY = "/usr/local/bin/opencode"
+
+    /** Loopback traffic stays outside the outbound proxy: the web UI talks to the server directly. */
+    const val NO_PROXY = "127.0.0.1,localhost,0.0.0.0"
     const val GUEST_OTA_DIR = "/opt/opencode-ota"
     const val GUEST_INSTRUCTIONS = "/etc/opencode-android/AGENTS.md"
     const val GUEST_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -107,6 +112,9 @@ object ProotCommand {
         // Username stays the shared default "opencode" on both lines.
         env["OPENCODE_SERVER_PASSWORD"] = c.password
         env["OPENCODE_PASSWORD"] = c.password
+        // The 1.x server line reads only OPENCODE_SERVER_PASSWORD; the 2.x line prefers OPENCODE_PASSWORD and
+        // accepts either. Setting both keeps a profile working across either bundled or OTA-delivered build.
+        env["OPENCODE_SERVER_PASSWORD"] = c.password
         env["OPENCODE_CLIENT"] = "android"
         env["OPENCODE_DISABLE_AUTOUPDATE"] = "1"
         env["OPENCODE_CONFIG_CONTENT"] = "{\"instructions\":[${MiniJson.quote(GUEST_INSTRUCTIONS)}]}"
@@ -125,9 +133,30 @@ object ProotCommand {
             env["OPENCODE_FILEWATCHER_DISABLE"] = "1"
         }
 
+        // The proxy carries only the server's outbound traffic: local loopback traffic (the web UI to the server)
+        // must never touch it, or the app would break without a tunnel.
+        if (!c.proxy.isNullOrEmpty()) {
+            for (key in listOf("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")) env[key] = c.proxy
+            for (key in listOf("NO_PROXY", "no_proxy")) env[key] = NO_PROXY
+            // The server is a Node executable: its built-in fetch (every model request) ignores the variables above
+            // unless this switch is on. Without it the tunnel would be up and carry nothing.
+            env["NODE_USE_ENV_PROXY"] = "1"
+        }
+
         env.putAll(extra)
 
         return env
+    }
+
+    /**
+     * True when the log shows the traced process died from SIGSEGV. proot prints "proot warning: signal 11 received
+     * from process -1" for it; on a number of devices the server cannot even start because of it, and the
+     * compatibility loader (PROOT_NO_SECCOMP=1) makes it go away - the service retries with that mode automatically.
+     */
+    fun segfaultIn(log: String): Boolean {
+        val lower = log.lowercase()
+
+        return "signal 11" in lower || "segmentation fault" in lower || "sigsegv" in lower
     }
 
     fun server(c: ProotConfig): Launch {

@@ -14,7 +14,7 @@ class ServerProcess(private val paths: Paths) {
     /** Where the server log stood when the running attempt started, so only that attempt is inspected on failure. */
     private var logMark: Long = 0
 
-    fun config(prefs: Prefs, profile: Profile, bridgeUrl: String, otaDir: File?): ProotConfig {
+    fun config(prefs: Prefs, profile: Profile, bridgeUrl: String, otaDir: File?, proxy: String? = null): ProotConfig {
         val home = Profiles.homeDir(paths.profilesDir, profile)
 
         return ProotConfig(
@@ -33,6 +33,7 @@ class ServerProcess(private val paths: Paths) {
             bindSharedStorage = prefs.bindStorage,
             timeZone = java.util.TimeZone.getDefault().id,
             otaBinDir = otaDir?.path,
+            proxy = proxy,
             zenApiKey = profile.zenApiKey,
         )
     }
@@ -85,8 +86,12 @@ class ServerProcess(private val paths: Paths) {
         }.apply { isDaemon = true; start() }
 
         if (!started.waitFor(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS)) {
-            started.destroyForcibly()
-            killOrphans()
+            // TERM first so proot's --kill-on-exit takes its tracees down with it; a bare SIGKILL would leave the
+            // node/opencode children orphaned and holding the port. No killOrphans() here: this self-test can run
+            // while the real server is up, and a blanket sweep would murder the working server with it.
+            runCatching { started.destroy() }
+
+            if (!started.waitFor(3, java.util.concurrent.TimeUnit.SECONDS)) started.destroyForcibly()
 
             return null
         }
@@ -187,10 +192,11 @@ class ServerProcess(private val paths: Paths) {
     }
 
     /** Reads why the server died, to tell the person something more useful than "failed". */
-    fun failureHint(exitCode: Int?): Pair<String, Boolean> {
+    fun failureHint(exitCode: Int?, compatAlready: Boolean = false): Pair<String, Boolean> {
         val tail = attemptLog()
         val lower = tail.lowercase()
         val seccomp = exitCode == 159 || "bad system call" in lower || "sigsys" in lower || "seccomp" in lower
+        val segfault = ProotCommand.segfaultIn(tail)
         val lines = tail.lines().filter { it.isNotBlank() }.takeLast(8).joinToString("\n")
 
         return when {
@@ -198,6 +204,17 @@ class ServerProcess(private val paths: Paths) {
                 "Система Android завершила процесс из-за системного вызова. Включите режим совместимости в настройках и повторите.",
                 "Android stopped the process over a system call. Turn on compatibility mode in settings and try again.",
             ) to true
+            segfault -> if (compatAlready) {
+                tr(
+                    "Процесс сервера снова упал с ошибкой памяти (signal 11 внутри proot). Режим совместимости уже включён и не помог — напишите в поддержку и приложите журнал кнопкой ниже.",
+                    "The server process crashed with a memory fault (signal 11 inside proot) again. Compatibility mode is already on and did not help - report it in the support chat and attach the log below.",
+                ) to true
+            } else {
+                tr(
+                    "Процесс сервера упал с ошибкой памяти (signal 11 внутри proot). Приложение уже перезапускает сервер в режиме совместимости - обычно это лечит. Если ошибка повторяется, напишите в поддержку и приложите журнал кнопкой ниже.",
+                    "The server process crashed with a memory fault (signal 11 inside proot). The app already restarts the server in compatibility mode - that usually fixes it. If it keeps crashing, report it in the support chat and attach the log below.",
+                ) to true
+            }
             "address already in use" in lower || "eaddrinuse" in lower -> tr(
                 "Порт сервера уже занят. Перезапустите сервер из настроек.",
                 "The server port is already in use. Restart the server from settings.",
@@ -208,6 +225,9 @@ class ServerProcess(private val paths: Paths) {
 
     /** What the current attempt printed, so an earlier attempt in the same log cannot be mistaken for it. */
     private fun attemptLog(): String = Log.since(paths.serverLog, logMark, 6 * 1024)
+
+    /** True when the current attempt's log shows the proot SIGSEGV the compatibility mode works around. */
+    fun crashedWithSegfault(): Boolean = ProotCommand.segfaultIn(attemptLog())
 
     /** True when the current attempt died because its port was already in use by something else on the phone. */
     fun portWasBusy(): Boolean {

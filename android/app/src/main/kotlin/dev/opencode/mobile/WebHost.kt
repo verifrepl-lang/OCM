@@ -165,12 +165,11 @@ class WebHost(private val activity: MainActivity) {
                 http.disconnect()
             }
         } catch (e: Exception) {
-            // No pairing endpoint (the 1.x servers have none): the interface takes the credential from an
-            // auth_token query parameter instead - the same base64 "user:password" the basic challenge wants - and
-            // strips it from the address once it is in. The web view also answers the basic challenge itself, so a
-            // page that ignores the parameter still gets in.
-            Log.w("web", "pairing unavailable (${e.message}); loading with an auth token")
-            "$root/?auth_token=" + Urls.basicCredential(password)
+            // The 2.x server pairs through a one-time code; the 1.x line has no /api/pair, but both accept the
+            // credential itself as the auth_token query parameter: the page reads it once, signs its own API calls
+            // with it and removes it from the address bar. When pairing is unavailable, hand the page the token.
+            Log.w("web", "pairing failed (${e.message}); opening with the auth token")
+            "$root/?auth_token=${Uri.encode(Urls.basicCredential(password))}"
         }
     }
 
@@ -221,7 +220,9 @@ class WebHost(private val activity: MainActivity) {
         }
 
         override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-            if (request.isForMainFrame) activity.onPageError(error.description?.toString().orEmpty())
+            // Aborted/cancelled loads (redirects, window.stop(), a superseded navigation) arrive with a non-positive
+            // code and are not failures: the full-screen error view over a live page reads as "the app froze".
+            if (request.isForMainFrame && error.errorCode > 0) activity.onPageError(error.description?.toString().orEmpty())
         }
 
         override fun onReceivedHttpAuthRequest(view: WebView, handler: android.webkit.HttpAuthHandler, host: String, realm: String?) {

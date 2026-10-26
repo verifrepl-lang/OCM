@@ -149,11 +149,12 @@ fun testTar(fixtures: File) {
     eq("sanitize root", TarGzExtractor.sanitize("/"), null)
 }
 
-fun cfg(compat: Boolean = false, ota: String? = null, zenKey: String? = null) = ProotConfig(
+fun cfg(compat: Boolean = false, ota: String? = null, proxy: String? = null, zenKey: String? = null) = ProotConfig(
     prootBin = "/data/app/lib/libproot.so", loader = "/data/app/lib/libproot-loader.so", nativeLibDir = "/data/app/lib",
     rootfs = "/data/files/rootfs", home = "/data/files/profiles/main/home", fakeProc = "/data/files/fakeproc",
     prootTmp = "/data/files/tmp", port = 4096, password = "s3cr\"et", bridgeUrl = "http://127.0.0.1:4090",
     bridgeToken = "tok", compat = compat, bindSharedStorage = true, timeZone = "Asia/Irkutsk", otaBinDir = ota,
+    proxy = proxy,
     zenApiKey = zenKey,
 )
 
@@ -362,6 +363,9 @@ class FakeTransport : Transport {
     var methods = """[{"id":"console","type":"oauth","label":"OpenCode Console account"},{"id":"key","type":"key","label":"API key"}]"""
     var connections = "[]"
 
+    /** Which line the fake server imitates for the attempt status: "legacy" answers only the 2.x route. */
+    var statusRoute = "v1"
+
     /** How many list requests still answer like a server whose plugins have not activated yet; then it warms up. */
     var coldReplies = 0
 
@@ -381,19 +385,20 @@ class FakeTransport : Transport {
                 }
             method == "POST" && path == "/api/integration/opencode/connect/oauth" ->
                 Reply(200, """{"location":{},"data":{"attemptID":"con_1","url":"https://opencode.ai/auth/device?user_code=ABCD-EFGH&x=1","instructions":"Enter code: ABCD-EFGH","mode":"auto","time":{"created":1,"expires":99}}}""")
-            // The 1.x name answers when legacyPolling is off (the default); the 2.x name answers instead when it is
-            // on, and the 1.x name is a 404 then - the app must fall back to it.
-            method == "GET" && path == "/api/integration/attempt/con_1" && !legacyPolling ->
-                Reply(200, if (status == "failed") """{"data":{"status":"failed","message":"access_denied","time":{"created":1,"expires":2}}}""" else """{"data":{"status":"$status","time":{"created":1,"expires":2}}}""")
-            method == "GET" && path == "/api/integration/opencode/connect/oauth/con_1" && legacyPolling ->
-                Reply(200, if (status == "failed") """{"data":{"status":"failed","message":"access_denied","time":{"created":1,"expires":2}}}""" else """{"data":{"status":"$status","time":{"created":1,"expires":2}}}""")
+            method == "GET" && path == "/api/integration/attempt/con_1" && statusRoute == "v1" ->
+                statusReply()
+            method == "GET" && path == "/api/integration/opencode/connect/oauth/con_1" && statusRoute == "legacy" ->
+                statusReply()
+            // The route this fake does not serve reports 404, the way the other line answers an unknown path.
+            method == "GET" && (path == "/api/integration/attempt/con_1" || path == "/api/integration/opencode/connect/oauth/con_1") ->
+                Reply(404, "{}")
             path.endsWith("/gone") -> Reply(404, "{}")
             else -> Reply(500, """{"message":"boom"}""")
         }
     }
 
-    /** A 2.x-style server: the attempt id only answers under the integration. */
-    var legacyPolling = false
+    private fun statusReply(): Reply =
+        Reply(200, if (status == "failed") """{"data":{"status":"failed","message":"access_denied","time":{"created":1,"expires":2}}}""" else """{"data":{"status":"$status","time":{"created":1,"expires":2}}}""")
 }
 
 fun testLogin() {
@@ -406,7 +411,7 @@ fun testLogin() {
     eq("attempt id", attempt.id, "con_1")
     eq("attempt code", attempt.code, "ABCD-EFGH")
     eq("attempt expires", attempt.expiresAt, 99L)
-    check("start picks oauth method", t.calls.any { it == """POST /api/integration/opencode/connect/oauth {"methodID":"console"}""" })
+    check("start picks oauth method", t.calls.any { it == """POST /api/integration/opencode/connect/oauth {"methodID":"console","inputs":{}}""" })
     eq("status pending", login.status(attempt), LoginStatus.Pending)
     t.status = "complete"
     eq("status complete", login.status(attempt), LoginStatus.Complete)
@@ -416,14 +421,13 @@ fun testLogin() {
     eq("status failed", login.status(attempt), LoginStatus.Failed("access_denied"))
     eq("status 404 is expired", login.status(attempt.copy(id = "gone")), LoginStatus.Expired)
 
-    // A 2.x-style server keeps the attempt under the integration and 404s the plain attempt id: the poll falls back
-    // to the old name and still reads the statuses.
-    t.legacyPolling = true
+    // The 2.x line serves the attempt status under its own route: the lookup falls through to it.
+    t.statusRoute = "legacy"
     t.status = "pending"
-    eq("legacy pending", login.status(attempt), LoginStatus.Pending)
+    eq("legacy status pending", login.status(attempt), LoginStatus.Pending)
     t.status = "complete"
-    eq("legacy complete", login.status(attempt), LoginStatus.Complete)
-    t.legacyPolling = false
+    eq("legacy status complete", login.status(attempt), LoginStatus.Complete)
+    t.statusRoute = "v1"
 
     t.connections = """[{"type":"credential","id":"cred1","label":"me@gmail.com","method":"oauth"},{"type":"credential","id":"cred2","label":"key","method":"key"},{"type":"env","name":"X"}]"""
     eq("accounts", login.accounts().map { it.id }, listOf("cred1", "cred2"))
@@ -468,19 +472,6 @@ fun testLogin() {
     t.connections = """[{"type":"credential","id":"cred1","label":"me@gmail.com","method":"oauth"},{"type":"env","name":"X"}]"""
     eq("sign-in read from a fetched entry", login.signedInAccounts(login.info()!!).map { it.label }, listOf("me@gmail.com"))
     eq("empty connections parse to no accounts", login.accounts(emptyInfo ?: emptyMap<Any?, Any?>()).size, 0)
-}
-
-fun testLoginFault() {
-    check("transport error retries", LoginFault.isRetryable("Transport error (POST https://opencode.ai/console/auth/device/code)"))
-    check("http 502 retries", LoginFault.isRetryable("HTTP 502"))
-    check("dns retries", LoginFault.isRetryable("Unable to resolve host \"opencode.ai\""))
-    check("timeout retries", LoginFault.isRetryable("connect timed out"))
-    check("method mismatch does not retry", !LoginFault.isRetryable("The server has no account sign-in method"))
-    check("http 404 does not retry", !LoginFault.isRetryable("HTTP 404"))
-    check("empty does not retry", !LoginFault.isRetryable(""))
-    check("null does not retry", !LoginFault.isRetryable(null))
-    check("friendly transport", LoginFault.friendly("Transport error (POST https://opencode.ai/console/auth/device/code)").contains("opencode.ai"))
-    eq("friendly passthrough", LoginFault.friendly("HTTP 401"), "HTTP 401")
 }
 
 fun testHttpTransport() {
@@ -864,6 +855,133 @@ fun testGuestPaths() {
     }
 }
 
+fun testMiniJsonWrite() {
+    eq(
+        "write mixed",
+        MiniJson.write(linkedMapOf<String, Any?>("a" to 1L, "b" to "x\"y", "c" to listOf(true, null, 2.5), "d" to linkedMapOf<String, Any?>("e" to "текст"))),
+        """{"a":1,"b":"x\"y","c":[true,null,2.5],"d":{"e":"текст"}}""",
+    )
+    eq("write int", MiniJson.write(42), "42")
+    eq("write bool", MiniJson.write(false), "false")
+    eq("write null", MiniJson.write(null), "null")
+    eq("write double whole", MiniJson.write(3.0), "3")
+    eq("write roundtrip", MiniJson.parse(MiniJson.write(MiniJson.parse("""{"x":[1,{"y":"z"}]}"""))), MiniJson.parse("""{"x":[1,{"y":"z"}]}"""))
+}
+
+fun testLoginFault() {
+    check("transport error retries", LoginFault.isRetryable("Transport error (POST https://opencode.ai/console/auth/device/code)"))
+    check("http 502 retries", LoginFault.isRetryable("HTTP 502"))
+    check("dns retries", LoginFault.isRetryable("Unable to resolve host \"opencode.ai\""))
+    check("timeout retries", LoginFault.isRetryable("connect timed out"))
+    check("method mismatch does not retry", !LoginFault.isRetryable("The server has no account sign-in method"))
+    check("http 404 does not retry", !LoginFault.isRetryable("HTTP 404"))
+    check("empty does not retry", !LoginFault.isRetryable(""))
+    check("null does not retry", !LoginFault.isRetryable(null))
+    check("friendly transport", LoginFault.friendly("Transport error (POST https://opencode.ai/console/auth/device/code)").contains("opencode.ai"))
+    eq("friendly passthrough", LoginFault.friendly("HTTP 401"), "HTTP 401")
+}
+
+fun testOpencodeStore() {
+    val base = Files.createTempDirectory("store").toFile()
+
+    try {
+        val home = File(base, "home").apply { mkdirs() }
+
+        // Plugin file names
+        eq("name plain", OpencodeStore.pluginFileName("my.js"), "my.js")
+        eq("name ts kept", OpencodeStore.pluginFileName("tool.ts"), "tool.ts")
+        eq("name adds js", OpencodeStore.pluginFileName("plugin"), "plugin.js")
+        eq("name strips path", OpencodeStore.pluginFileName("/etc/passwd"), "passwd.js")
+        eq("name cleans", OpencodeStore.pluginFileName("my plugin!.js"), "my_plugin_.js")
+        eq("name mjs", OpencodeStore.pluginFileName("a.mjs"), "a.mjs")
+
+        // Install from bytes, list, delete
+        val installed = OpencodeStore.installPluginBytes(home, "export const P = 1".toByteArray(), "nice plugin.js")
+
+        eq("installed name", installed.name, "nice_plugin.js")
+        check("installed exists", installed.exists())
+        eq("listed", OpencodeStore.localPlugins(home).map { it.name }, listOf(installed.name))
+        check("delete works", OpencodeStore.deletePlugin(home, installed))
+
+        // A HTML page is refused as a plugin
+        check("html is not a script", !OpencodeStore.looksLikeScript("x.js", "<!doctype html><html></html>".toByteArray()))
+        check("script passes", OpencodeStore.looksLikeScript("x.js", "export const x = 1".toByteArray()))
+
+        // Provider keys in auth.json
+        OpencodeStore.setProviderKey(home, "anthropic", "sk-ant-0123456789abcdef")
+        eq("key saved", OpencodeStore.connectedKeys(home)["anthropic"], "sk-ant...cdef")
+        check("raw key on disk", OpencodeStore.authFile(home).readText().contains("sk-ant-0123456789abcdef"))
+        eq("key masked", OpencodeStore.mask("sk-ant-0123456789abcdef"), "sk-ant...cdef")
+        OpencodeStore.clearProviderKey(home, "anthropic")
+        check("key cleared", OpencodeStore.connectedKeys(home).isEmpty())
+
+        // Custom providers in the config
+        OpencodeStore.addCustomProvider(
+            home,
+            CustomProvider("myapi", "My API", "https://api.example.com/v1", "sk-custom-1234567890", listOf("glm-4.6" to "GLM 4.6")),
+        )
+
+        val providers = OpencodeStore.customProviders(home)
+
+        eq("provider listed", providers.map { it.id }, listOf("myapi"))
+        eq("provider base", providers.first().baseUrl, "https://api.example.com/v1")
+        eq("provider models", providers.first().models, listOf("glm-4.6" to "GLM 4.6"))
+        eq("provider key also in auth", OpencodeStore.connectedKeys(home)["myapi"], "sk-cus...7890")
+        eq("provider npm untouched", OpencodeStore.npmPlugins(home), emptyList())
+
+        OpencodeStore.setDefaultModel(home, "myapi", "glm-4.6")
+        eq("default model", OpencodeStore.defaultModel(home), "myapi/glm-4.6")
+
+        OpencodeStore.removeCustomProvider(home, "myapi")
+        check("provider removed", OpencodeStore.customProviders(home).isEmpty())
+        eq("default model cleaned", OpencodeStore.defaultModel(home), null)
+        check("auth entry removed", OpencodeStore.connectedKeys(home).isEmpty())
+
+        // npm plugins
+        OpencodeStore.addNpmPlugin(home, "opencode-example-plugin")
+        OpencodeStore.addNpmPlugin(home, "opencode-example-plugin")
+        eq("npm plugin once", OpencodeStore.npmPlugins(home), listOf("opencode-example-plugin"))
+        OpencodeStore.removeNpmPlugin(home, "opencode-example-plugin")
+        check("npm plugin removed", OpencodeStore.npmPlugins(home).isEmpty())
+
+        // Rules: a global one and ones for specific models
+        OpencodeStore.saveRule(home, null, "Global style", null, "Be brief.\n")
+        OpencodeStore.saveRule(home, null, "Claude rule", "anthropic/claude-sonnet-4-5", "Use tools carefully.")
+        OpencodeStore.saveRule(home, null, "Bare model", "glm-4.6", "Short answers.")
+
+        val rules = OpencodeStore.rules(home)
+
+        eq("three rules", rules.size, 3)
+        eq("global rule file", rules.first { it.model == null }.fileName.endsWith(".md"), true)
+
+        val instructions = (OpencodeStore.readMap(OpencodeStore.configFile(home))["instructions"] as? List<*>).orEmpty()
+
+        eq("one global instruction", instructions.size, 1)
+        check("instruction is a guest path", (instructions.first() as String).startsWith("/root/.config/opencode/rules/"))
+
+        val plugin = File(OpencodeStore.pluginsDir(home), OpencodeStore.RULES_PLUGIN)
+
+        check("rules plugin written", plugin.exists())
+        check("plugin has model rule", plugin.readText().contains("anthropic/claude-sonnet-4-5"))
+        check("plugin has bare model rule", plugin.readText().contains("glm-4.6"))
+        check("plugin has hook", plugin.readText().contains("experimental.chat.system.transform"))
+
+        // Editing and deleting
+        val edited = OpencodeStore.saveRule(home, rules.first { it.name == "Global style" }, "Global style v2", null, "Be very brief.")
+
+        eq("renamed", edited.name, "Global style v2")
+        eq("content updated", OpencodeStore.ruleContent(home, edited), "Be very brief.")
+        eq("still one global instruction", (OpencodeStore.readMap(OpencodeStore.configFile(home))["instructions"] as? List<*>).orEmpty().size, 1)
+
+        for (rule in OpencodeStore.rules(home)) OpencodeStore.deleteRule(home, rule)
+
+        check("no rules left", OpencodeStore.rules(home).isEmpty())
+        eq("instructions removed", (OpencodeStore.readMap(OpencodeStore.configFile(home))["instructions"] as? List<*>).orEmpty().size, 0)
+    } finally {
+        Fs.deleteTree(base)
+    }
+}
+
 fun testGuestAccounts() {
     val base = Files.createTempDirectory("guests").toFile()
 
@@ -928,15 +1046,173 @@ fun main(args: Array<String>) {
     testProfiles()
     testLogin()
     testLoginFault()
+    testMiniJsonWrite()
     testHttpTransport()
     testOta(fixtures)
     testBridge()
     testOtaPackage(fixtures)
     testGuestPaths()
+    testOpencodeStore()
+    testProxyAndLimits()
+    testNetworkFeatures()
+    testGithubPlugins()
     testGuestAccounts()
 
     println("passed: $passed, failed: ${failures.size}")
     failures.forEach { println("FAIL: $it") }
 
     if (failures.isNotEmpty()) System.exit(1)
+}
+
+// Quota recognition and the server's outbound proxy environment.
+
+fun testProxyAndLimits() {
+    // The server environment points at the local tunnel and never proxies loopback traffic.
+    val proxyUrl = "http://127.0.0.1:25346"
+    val proxied = ProotCommand.guestEnv(cfg(proxy = proxyUrl))
+
+    eq("proxy env http", proxied["HTTP_PROXY"], proxyUrl)
+    eq("proxy env https", proxied["HTTPS_PROXY"], proxyUrl)
+    check("proxy env no_proxy", proxied["NO_PROXY"]?.contains("127.0.0.1") == true)
+    check("proxy env lowercase", proxied["http_proxy"] == proxyUrl)
+
+    // Node's built-in fetch only honours the proxy variables with this switch on.
+    eq("node env proxy switch", proxied["NODE_USE_ENV_PROXY"], "1")
+
+    val direct = ProotCommand.guestEnv(cfg())
+
+    check("no node proxy switch without a tunnel", direct["NODE_USE_ENV_PROXY"] == null)
+    check("no proxy env without a tunnel", direct.keys.none { it.equals("HTTP_PROXY", ignoreCase = true) })
+
+    // Limit recognition on the event stream.
+    check("free limit event", Limits.carriesLimit("session.step.failed", "{\"error\":{\"type\":\"provider.free-limit\",\"message\":\"Free usage limit reached\"}}"))
+    check("rate limit event", Limits.carriesLimit("session.step.failed", "{\"error\":{\"type\":\"provider.rate-limit\",\"status\":429}}"))
+    check("retry status with rate limit", Limits.carriesLimit("session.status", "{\"status\":{\"type\":\"retry\",\"message\":\"Rate limit exceeded\"}}"))
+    check("unrelated event ignored", !Limits.carriesLimit("message.part.updated", "rate limit"))
+    check("plain failure ignored", !Limits.carriesLimit("session.step.failed", "{\"error\":{\"message\":\"file not found\"}}"))
+
+    // A failed assistant answer whose error text talks about a spent limit is what rotates the exit address. The
+    // shape is the one the 1.x server emits: message.updated carrying info.error.name=APIError and the message.
+    val quotaAnswer = "{\"info\":{\"role\":\"assistant\",\"error\":{\"name\":\"APIError\",\"data\":{\"message\":\"Free usage limit exceeded: your IP address has run out of free quota. Rate limit exceeded.\",\"statusCode\":429}}},\"time\":{\"completed\":1792915511054}}"
+    val quotaAnswerRu = "{\"info\":{\"role\":\"assistant\",\"error\":{\"name\":\"APIError\",\"data\":{\"message\":\"Квота бесплатных моделей исчерпана\"}}}}"
+
+    check("quota answer rotates", Limits.failedOnLimit("message.updated", quotaAnswer))
+    check("russian quota answer rotates", Limits.failedOnLimit("message.updated", quotaAnswerRu))
+    check("ordinary answer never rotates", !Limits.failedOnLimit("message.updated", "{\"info\":{\"role\":\"assistant\",\"parts\":[{\"type\":\"text\",\"text\":\"the rate limit topic in plain words\"}]}}"))
+    check("ordinary error never rotates", !Limits.failedOnLimit("message.updated", "{\"info\":{\"role\":\"assistant\",\"error\":{\"name\":\"APIError\",\"data\":{\"message\":\"connection refused\"}}}}"))
+    check("step failure quota still carries", Limits.failedOnLimit("session.step.failed", "{\"error\":{\"message\":\"quota exceeded\"}}"))
+
+    // Segfault classification: proot's signal 11 line and lowercase variants, but not unrelated text.
+    check(
+        "segfault detected",
+        ProotCommand.segfaultIn("proot warning: signal 11 received from process -1") &&
+            ProotCommand.segfaultIn("Segmentation fault (core dumped)") &&
+            ProotCommand.segfaultIn("killed by SIGSEGV"),
+    )
+    check("no segfault in a clean log", !ProotCommand.segfaultIn("server listening on http://127.0.0.1:4099"))
+}
+
+// Network diagnostics and VLESS/Hysteria2 subscription parsing.
+
+fun testNetworkFeatures() {
+    val vless = VpnSubscriptionParser.parseUri(
+        "vless://123e4567-e89b-12d3-a456-426614174000@de.example.net:443?encryption=none&security=reality&sni=example.net&fp=chrome&pbk=WwrPBX0txbX4KOtconVnvGwctm2v1jK7dGdOMOikvHo%3D&sid=abcd&type=ws&host=cdn.example.net&path=%2Fws#DE%20Frankfurt",
+    )
+    eq("VLESS protocol parsed", vless.protocol, "VLESS")
+    eq("VLESS server host parsed", vless.host, "de.example.net")
+    eq("VLESS port parsed", vless.port, 443)
+    eq("VLESS uuid parsed", vless.user, "123e4567-e89b-12d3-a456-426614174000")
+    eq("VLESS display label decoded", vless.name, "DE Frankfurt")
+
+    // The Reality public key must survive the journey into the config in the exact form sing-box decodes:
+    // unpadded URL-safe base64. A "PUBKEY" placeholder is not a key at all and must be refused.
+    throws("reality key must be base64") { VpnSubscriptionParser.realityKey("PUBKEY") }
+    throws("reality key must be 32 bytes") { VpnSubscriptionParser.realityKey("c2hvcnQ=") }
+
+    // Standard base64 with "+" and "/" and padding is the common form in real links; sing-box wants URL-safe raw.
+    val standardKey = "++++rd6rrbq+7/7t3q2+7/7t3q2+7/7t3q2+7/7t3q0="
+    eq("reality key normalized to url-safe raw", VpnSubscriptionParser.realityKey(standardKey), "----rd6rrbq-7_7t3q2-7_7t3q2-7_7t3q2-7_7t3q0")
+    eq("reality key accepted as url-safe raw", VpnSubscriptionParser.realityKey("WwrPBX0txbX4KOtconVnvGwctm2v1jK7dGdOMOikvHo="), "WwrPBX0txbX4KOtconVnvGwctm2v1jK7dGdOMOikvHo")
+    eq("reality key accepted as unpadded standard", VpnSubscriptionParser.realityKey("WwrPBX0txbX4KOtconVnvGwctm2v1jK7dGdOMOikvHo"), "WwrPBX0txbX4KOtconVnvGwctm2v1jK7dGdOMOikvHo")
+
+    val vlessConfig = VpnSubscriptionParser.singBoxConfig(vless, 25346)
+    check("VLESS config has vless outbound", vlessConfig.contains("vless"))
+    check("VLESS config carries Reality key", vlessConfig.contains("WwrPBX0txbX4KOtconVnvGwctm2v1jK7dGdOMOikvHo"))
+    check("VLESS config has ws transport", vlessConfig.contains("ws"))
+    check("local mixed proxy binds to loopback", vlessConfig.contains("127.0.0.1"))
+    check("route final points at the proxy", vlessConfig.contains("proxy"))
+
+    val hysteria = VpnSubscriptionParser.parseUri(
+        "hysteria2://pass%2Bword@nl.example.net:443?sni=nl.example.net&obfs=salamander&obfs-password=secret#NL%20Amsterdam",
+    )
+    eq("Hysteria2 protocol parsed", hysteria.protocol, "Hysteria2")
+    eq("Hysteria2 password decoded", hysteria.user, "pass+word")
+    val hysteriaConfig = VpnSubscriptionParser.singBoxConfig(hysteria, 25346)
+    check("Hysteria2 config has correct outbound", hysteriaConfig.contains("hysteria2"))
+    check("Hysteria2 config includes obfuscation", hysteriaConfig.contains("salamander"))
+
+    val extracted = VpnSubscriptionParser.parseSubscriptionText(
+        "vless://123e4567-e89b-12d3-a456-426614174000@de.example.net:443?security=tls&sni=de.example.net#DE\n" +
+            "hysteria2://pass@nl.example.net:443?sni=nl.example.net#NL",
+    )
+    eq("multi-node subscription parsed", extracted.size, 2)
+
+    val plainVless = VpnSubscriptionParser.parseUri("vless://123e4567-e89b-12d3-a456-426614174000@de.example.net:443?security=tls&sni=de.example.net#DE")
+    eq("plain TLS VLESS accepted", plainVless.parameters["security"], "tls")
+    check("plain TLS config has no reality block", !VpnSubscriptionParser.singBoxConfig(plainVless, 25346).contains("reality"))
+
+    val query = NetworkDiagnostics.makeDnsQuery("example.com", 0xBEEF)
+    eq("DNS query id high byte", query[0].toInt() and 0xff, 0xBE)
+    eq("DNS query id low byte", query[1].toInt() and 0xff, 0xEF)
+    eq("DNS query has one question", (query[4].toInt() and 0xff) shl 8 or (query[5].toInt() and 0xff), 1)
+    val response = ByteArray(12)
+    response[0] = 0xBE.toByte(); response[1] = 0xEF.toByte()
+    response[2] = 0x81.toByte(); response[3] = 0x80.toByte()
+    response[6] = 0; response[7] = 1
+    check("valid DNS response accepted", NetworkDiagnostics.validDnsResponse(response, 0xBEEF))
+    response[3] = 0x83.toByte()
+    check("DNS failure response rejected", !NetworkDiagnostics.validDnsResponse(response, 0xBEEF))
+    eq("three DNS providers available", NetworkDiagnostics.resolvers.size, 3)
+}
+
+// Plugins from GitHub: addresses, directory listings, trust.
+fun testGithubPlugins() {
+    val short = GithubPlugins.parse("owner/my-plugin")
+
+    eq("short form", short, GithubPlugins.Source("owner", "my-plugin", null, null, false))
+    eq("short form with ref", GithubPlugins.parse("owner/my-plugin@v1.2")?.ref, "v1.2")
+    eq("github: prefix with ref", GithubPlugins.parse("github:owner/repo#dev"), GithubPlugins.Source("owner", "repo", "dev", null, false))
+    eq("repo link", GithubPlugins.parse("https://github.com/owner/repo"), GithubPlugins.Source("owner", "repo", null, null, false))
+    eq("repo link with .git and slash", GithubPlugins.parse("https://github.com/owner/repo.git/"), GithubPlugins.Source("owner", "repo", null, null, false))
+    eq("tree link", GithubPlugins.parse("https://github.com/owner/repo/tree/main/plugins"), GithubPlugins.Source("owner", "repo", "main", "plugins", false))
+    eq("blob link", GithubPlugins.parse("https://github.com/owner/repo/blob/main/src/tool.ts"), GithubPlugins.Source("owner", "repo", "main", "src/tool.ts", true))
+    eq("raw link", GithubPlugins.parse("https://raw.githubusercontent.com/owner/repo/main/p.js?x=1"), GithubPlugins.Source("owner", "repo", "main", "p.js", true))
+    check("blob of a non-script is refused", GithubPlugins.parse("https://github.com/owner/repo/blob/main/README.md") == null)
+    check("other hosts are refused", GithubPlugins.parse("https://example.com/owner/repo") == null)
+    check("traversal is refused", GithubPlugins.parse("https://github.com/owner/repo/tree/main/../x") == null)
+    check("empty is refused", GithubPlugins.parse("  ") == null)
+    check("single word is refused", GithubPlugins.parse("repo") == null)
+
+    eq("contents url root", GithubPlugins.contentsUrl(short!!, ""), "https://api.github.com/repos/owner/my-plugin/contents")
+    eq("contents url dir with ref", GithubPlugins.contentsUrl(short.copy(ref = "v1"), "plugins"), "https://api.github.com/repos/owner/my-plugin/contents/plugins?ref=v1")
+    eq("raw url default branch", GithubPlugins.rawUrl(short, "a/b.js"), "https://raw.githubusercontent.com/owner/my-plugin/HEAD/a/b.js")
+
+    check("typings are not plugins", !GithubPlugins.isPluginName("index.d.ts"))
+    check("tests are not plugins", !GithubPlugins.isPluginName("a.test.ts") && !GithubPlugins.isPluginName("a.spec.js"))
+    check("configs are not plugins", !GithubPlugins.isPluginName("vite.config.ts"))
+    check("scripts are plugins", GithubPlugins.isPluginName("Tool.ts") && GithubPlugins.isPluginName("x.mjs"))
+
+    val listing = """[
+        {"name":"b.js","path":"plugins/b.js","type":"file","size":120,"download_url":"https://raw.githubusercontent.com/o/r/HEAD/plugins/b.js"},
+        {"name":"a.ts","path":"plugins/a.ts","type":"file","size":90,"download_url":"https://raw.githubusercontent.com/o/r/HEAD/plugins/a.ts"},
+        {"name":"a.d.ts","path":"plugins/a.d.ts","type":"file","size":9,"download_url":"https://raw.githubusercontent.com/o/r/HEAD/plugins/a.d.ts"},
+        {"name":"sub","path":"plugins/sub","type":"dir","size":0,"download_url":null},
+        {"name":"evil.js","path":"plugins/evil.js","type":"file","size":10,"download_url":"https://evil.example/evil.js"},
+        {"name":"big.js","path":"plugins/big.js","type":"file","size":99999999,"download_url":"https://raw.githubusercontent.com/o/r/HEAD/plugins/big.js"},
+        {"name":"README.md","path":"plugins/README.md","type":"file","size":5,"download_url":"https://raw.githubusercontent.com/o/r/HEAD/plugins/README.md"}
+    ]"""
+
+    eq("listing keeps plugin files only, sorted", GithubPlugins.candidates(listing).map { it.name }, listOf("a.ts", "b.js"))
+    eq("single-file reply has no candidates", GithubPlugins.candidates("{\"name\":\"a.js\",\"type\":\"file\"}"), emptyList<GithubPlugins.Candidate>())
+    eq("garbage has no candidates", GithubPlugins.candidates("not json"), emptyList<GithubPlugins.Candidate>())
 }

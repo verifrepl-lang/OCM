@@ -56,6 +56,25 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("floating_menu", true)
         set(value) = sp.edit().putBoolean("floating_menu", value).apply()
 
+    /** DNS resolver tests in settings are manual diagnostics; off by default and never changes Android's system DNS. */
+    var dnsDiagnosticsEnabled: Boolean
+        get() = sp.getBoolean("dns_diagnostics_enabled", false)
+        set(value) = sp.edit().putBoolean("dns_diagnostics_enabled", value).apply()
+
+    /** Route the local server through a user-supplied VLESS/Hysteria2 subscription (sing-box). Off by default. */
+    var vpnSubscriptionEnabled: Boolean
+        get() = sp.getBoolean("vpn_subscription_enabled", false)
+        set(value) = sp.edit().putBoolean("vpn_subscription_enabled", value).apply()
+
+    var vpnSubscriptionUrl: String
+        get() = sp.getString("vpn_subscription_url", "") ?: ""
+        set(value) = sp.edit().putString("vpn_subscription_url", value.trim()).apply()
+
+    /** Key of the chosen subscription server; blank means the first one. */
+    var vpnSelectedNode: String
+        get() = sp.getString("vpn_selected_node", "") ?: ""
+        set(value) = sp.edit().putString("vpn_selected_node", value).apply()
+
     /** One-time prompts: true once [key] has been shown. */
     fun seen(key: String) = sp.getBoolean("seen_$key", false)
 
@@ -63,6 +82,11 @@ class Prefs(context: Context) {
     var signedIn: Boolean
         get() = sp.getBoolean("signed_in", false)
         set(value) = sp.edit().putBoolean("signed_in", value).apply()
+
+    /** True when the first-launch sign-in was passed over; the offer does not come back until the app is reinstalled. */
+    var loginSkipped: Boolean
+        get() = sp.getBoolean("login_skipped", false)
+        set(value) = sp.edit().putBoolean("login_skipped", value).apply()
 
     fun markSeen(key: String) = sp.edit().putBoolean("seen_$key", true).apply()
 
@@ -78,6 +102,10 @@ class Prefs(context: Context) {
     /** The token commands in the Linux environment present to the app's loopback bridge. */
     val bridgeToken: String get() = secret("bridge_token", 16)
 
+    // The worker thread (server spawn) and the UI thread can both ask for a secret on a fresh install; without the
+    // lock each of them could generate a different value and the last write would win, leaving the server with a
+    // password that is nowhere in the prefs.
+    @Synchronized
     private fun secret(key: String, bytes: Int): String {
         sp.getString(key, null)?.let { return it }
 
@@ -90,5 +118,10 @@ class Prefs(context: Context) {
         sp.edit().putString(key, value).apply()
 
         return value
+    }
+
+    /** Drops every preference - part of "erase all app data", which promises a full wipe. */
+    fun clearAll() {
+        sp.edit().clear().commit()
     }
 }

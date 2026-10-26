@@ -18,6 +18,8 @@ class EventWatcher(
     private val inForeground: () -> Boolean,
     /** Whether the active profile runs its own Console account; separates personal limits from the shared bucket. */
     private val hasAccount: () -> Boolean = { false },
+    /** Called for every event whose answer died on a spent anonymous limit, foreground or not. */
+    private val onQuotaExhausted: () -> Unit = {},
 ) {
     @Volatile
     private var running = false
@@ -77,7 +79,9 @@ class EventWatcher(
             } catch (_: InterruptedException) {
                 return
             } catch (e: Exception) {
-                if (running) Log.w("events", "stream lost: ${e.message}")
+                // Log only the FIRST failure of an outage: a dead server is retried with backoff every few seconds,
+                // and one warning per reconnect would spam five identical lines before the watchdog reacts.
+                if (running && delay == 2_000L) Log.w("events", "stream lost: ${e.message}")
             } finally {
                 runCatching { connection?.disconnect() }
             }
@@ -101,6 +105,12 @@ class EventWatcher(
             if (!seen.add(event.id)) return
             if (seen.size > 200) seen.remove(seen.first())
         }
+
+        // Quota and rate-limit events are provider answers, not network failures: the tunnel is a route, not a quota
+        // mechanism, so nothing here reconnects or re-registers the route because of them. What a spent anonymous
+        // limit does do is hand the decision to the service: without an account the limit belongs to the current
+        // address, and a different exit node is a fresh one.
+        if (Limits.failedOnLimit(event.type, event.raw)) onQuotaExhausted()
 
         if (!enabled() || inForeground()) return
 

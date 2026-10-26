@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
-# Builds the OpenCode server for linux-arm64 from the upstream sources, the same way upstream's own release job does it
-# (a Node single-executable build that carries the web UI inside).
+# Builds the OpenCode server for linux-arm64 from the upstream sources, the same way upstream's own release job does it.
+#
+# Two upstream layouts are supported, because the project moved its build between release lines:
+#   - the 1.x line compiles a Bun single binary from packages/opencode (the web UI is embedded along the way);
+#   - the 2.x line builds a Node single executable from packages/cli (a Node SEA that carries the web UI inside).
 #
 # Usage: runtime/build-opencode.sh <upstream-ref> <out-dir>
-#   <upstream-ref>  a tag such as v2.0.33, a branch or a commit
+#   <upstream-ref>  a tag such as v1.19.4 or v2.0.33, a branch or a commit
 #   <out-dir>       receives `opencode` (the executable) and `build-info.json`
 #
-# Needs an arm64 Linux host, bun (the version in upstream's package.json) and Node (upstream pins its version; the build
-# downloads it when the one on PATH differs). Environment: UPSTREAM_REPO, UPSTREAM_VERSION (default: the ref without a
-# leading "v"), SRC_DIR (an existing checkout to build instead of cloning).
+# Needs an arm64 Linux host, bun (the version in upstream's package.json) and, for the 2.x line only, Node (upstream
+# pins its version; the build downloads it when the one on PATH differs). Environment: UPSTREAM_REPO,
+# UPSTREAM_VERSION (default: the ref without a leading "v"), SRC_DIR (an existing checkout to build instead of
+# cloning).
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -45,14 +49,20 @@ echo "Building $repo $version ($commit)"
 cd "$src"
 
 # Patches this project carries on top of the upstream tag, one per feature/fix.
-# runtime/patches/v1 (the 1.x line this app builds) and runtime/patches/v2 (the 2.x line) are empty on purpose right
-# now: the bundled server is a byte-for-byte copy of upstream's own client - the Zen identity included, because the
-# gateway meters the free (anonymous) capacity in one world-shared bucket that no client-side change can influence,
-# and an altered client identity only breaks the parity "the original answers, ours must too" depends on. Each patch
-# is applied once: a re-run on a dirty checkout recognises its own work and skips; a patch that no longer fits the
-# upstream tag fails the build loudly instead of shipping silently unpatched.
-major="${version%%.*}"
-patch_dir="$here/patches/v$major"
+# runtime/patches/v1 applies to the 1.x line, runtime/patches/v2 to the 2.x line; the line is told apart the same
+# way the build step below does it. Both directories are empty on purpose right now: the bundled server is a
+# byte-for-byte copy of the upstream client - the Zen identity included, because the gateway meters the free
+# (anonymous) capacity in one world-shared bucket that no client-side change can influence, and an altered client
+# identity only breaks the parity "the original answers, ours must too" depends on. Each patch is applied once: a
+# re-run on a dirty checkout recognises its own work and skips; a patch that no longer fits the upstream tag fails
+# the build loudly instead of shipping silently unpatched.
+line="unknown"
+if [ -f packages/opencode/script/build.ts ]; then
+  line="v1"
+elif [ -f packages/cli/script/build-node.ts ]; then
+  line="v2"
+fi
+patch_dir="$here/patches/$line"
 if [ -d "$patch_dir" ]; then
   for patch in "$patch_dir"/*.patch; do
     [ -e "$patch" ] || continue
@@ -74,17 +84,18 @@ bun install --frozen-lockfile
 export OPENCODE_CHANNEL=latest
 export OPENCODE_VERSION="$version"
 
-# The 1.x line builds with Bun's own compiler (the web UI is embedded by the build itself); the 2.x line used a Node
-# single-executable built by packages/cli/script/build-node.ts with a prebuilt web-UI archive.
-if [ "$major" = "1" ]; then
+if [ -f packages/opencode/script/build.ts ]; then
+  # The 1.x line: one Bun-compiled binary for the host (arm64), web UI embedded by the same script.
   bun packages/opencode/script/build.ts --single --skip-install
-
   built="$src/packages/opencode/dist/opencode-linux-arm64/bin/opencode"
-else
+elif [ -f packages/cli/script/build-node.ts ]; then
+  # The 2.x line: a Node SEA built the way upstream's release job builds it.
   bun packages/cli/script/build-node.ts --app-archive-only --app-archive=.cache/app-archive.bin --skip-install
   bun packages/cli/script/build-node.ts --target=linux-arm64 --skip-install --outdir=dist/node --app-archive=.cache/app-archive.bin
-
   built="$src/packages/cli/dist/node/cli-node-linux-arm64/bin/opencode2-node"
+else
+  echo "Neither the 1.x (packages/opencode/script/build.ts) nor the 2.x (packages/cli/script/build-node.ts) build script is present" >&2
+  exit 1
 fi
 
 [ -f "$built" ] || { echo "Upstream did not produce $built" >&2; exit 1; }
@@ -105,7 +116,7 @@ esac
 install -m 0755 "$built" "$out/opencode"
 
 sha="$(sha256sum "$out/opencode" | cut -d' ' -f1)"
-node_version="$(grep -oE 'NODE_VERSION = "[0-9.]+"' packages/cli/script/build-node.ts | grep -oE '[0-9.]+' | head -1 || true)"
+node_version="$(grep -oE 'NODE_VERSION = "[0-9.]+"' packages/cli/script/build-node.ts 2>/dev/null | grep -oE '[0-9.]+' | head -1 || true)"
 
 jq -n \
   --arg repo "$repo" --arg version "$version" --arg ref "$ref" --arg commit "$commit" \

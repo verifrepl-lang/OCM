@@ -137,7 +137,9 @@ class ConsoleLogin(
         val reply = transport.request(
             "POST",
             "/api/integration/$integration/connect/oauth",
-            "{\"methodID\":${MiniJson.quote(methodId)}}",
+            // The 1.x line requires the (empty) inputs record even for a method that asks nothing; the 2.x line
+            // ignores it. Sending it keeps one code path working on either server build.
+            "{\"methodID\":${MiniJson.quote(methodId)},\"inputs\":{}}",
         )
 
         if (reply.code !in 200..299) throw LoginException(failure(reply))
@@ -151,20 +153,26 @@ class ConsoleLogin(
     }
 
     fun status(attempt: LoginAttempt): LoginStatus {
-        // The 1.x servers poll the attempt by its id; the 2.x ones nested it under the integration. The names exist
-        // on their own line only, and a wrong-line request can come back as 404 or as some non-API page, so the
-        // fallback also fires when the reply holds no status object. Both names 404 = the attempt is really gone.
+        // The two server lines expose the attempt status under different routes: the 1.x line at
+        // /api/integration/attempt/:id, the 2.x line at /api/integration/:id/connect/oauth/:id. A 404 - or a reply
+        // that carries no status object at all, which is what asking the wrong line through a catch-all UI route
+        // looks like - sends the poll to the other name; both coming up empty means the attempt is really gone.
         var reply = transport.request("GET", "/api/integration/attempt/${attempt.id}")
 
-        if (reply.code == 404 || statusData(reply) == null) {
-            val alt = transport.request("GET", "/api/integration/$integration/connect/oauth/${attempt.id}")
+        if (reply.code == 404 || (reply.code in 200..299 && statusData(reply) == null)) {
+            val legacy = transport.request("GET", "/api/integration/$integration/connect/oauth/${attempt.id}")
 
-            if (alt.code in 200..299 && statusData(alt) != null) reply = alt
+            if (legacy.code == 404) return LoginStatus.Expired
+            if (legacy.code !in 200..299) throw LoginException(failure(legacy))
+            if (statusData(legacy) != null) reply = legacy
         }
 
-        if (reply.code == 404) return LoginStatus.Expired
+        if (reply.code !in 200..299) {
+            // The 1.x handler reports an attempt that left its registry as a server error naming the id.
+            if (reply.code == 500 && reply.body.contains("not found", ignoreCase = true)) return LoginStatus.Expired
 
-        if (reply.code !in 200..299) throw LoginException(failure(reply))
+            throw LoginException(failure(reply))
+        }
 
         val data = statusData(reply) ?: throw LoginException("Unexpected status reply")
 

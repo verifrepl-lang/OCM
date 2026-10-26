@@ -136,10 +136,29 @@ jobs:
       - name: Check the server against what the app needs
         run: bash runtime/contract-test.sh out/server/opencode "${{ steps.up.outputs.version }}"
 
+      # The VPN subscription that ships as the app's default node list: pulled from repo secrets at build time.
+      # VPN_NODES_TEXT wins when both are set (raw vless:// / hy2:// links, one per line); VPN_SUBSCRIPTION_URL is
+      # fetched here. Without either the file stays empty and the subscription feature waits for a manual import.
+      - name: Default VPN nodes from secrets
+        env:
+          VPN_SUBSCRIPTION_URL: ${{ secrets.VPN_SUBSCRIPTION_URL }}
+          VPN_NODES_TEXT: ${{ secrets.VPN_NODES_TEXT }}
+        run: |
+          mkdir -p out/assets
+          out=out/assets/vpn-default-nodes.txt
+          : > "$out"
+          if [ -n "$VPN_NODES_TEXT" ]; then
+            printf '%s\n' "$VPN_NODES_TEXT" > "$out"
+          elif [ -n "$VPN_SUBSCRIPTION_URL" ]; then
+            curl -fsSL --retry 3 --max-time 60 -H "User-Agent: OpenCode-Mobile build" "$VPN_SUBSCRIPTION_URL" -o "$out" || : > "$out"
+          fi
+          echo "vpn-default-nodes.txt is $(wc -c < "$out") bytes"
+
       - name: Launcher libraries (proot)
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq patchelf
           bash runtime/fetch-proot.sh out/jniLibs/arm64-v8a
+          bash runtime/fetch-sing-box.sh out/jniLibs/arm64-v8a
 
       - name: Build date
         id: seq
@@ -150,6 +169,9 @@ jobs:
 
       - name: Linux userland archive
         run: bash runtime/build-rootfs.sh out/server/opencode out/assets "${{ steps.up.outputs.version }}-${{ steps.seq.outputs.seq }}"
+
+      - name: Include sing-box license
+        run: curl -fsSL --retry 3 --max-time 30 https://raw.githubusercontent.com/SagerNet/sing-box/v1.12.9/LICENSE -o out/assets/sing-box-LICENSE.txt
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -197,7 +219,8 @@ jobs:
       - name: Version
         id: ver
         run: |
-          if [ "${GITHUB_REF_TYPE}" = tag ]; then name="${GITHUB_REF_NAME#v}"; else name="1.0.7"; fi
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then name="${GITHUB_REF_NAME#v}"; else name="$(sed -n 's/.*VERSION_NAME") ?: "\([0-9][0-9.]*\)".*/\1/p' android/app/build.gradle.kts | head -1)"; fi
+          [ -n "$name" ] || { echo "::error::could not read the default version from android/app/build.gradle.kts"; exit 1; }
           # Minutes since the epoch: always increases, and stays far below the 2^31 limit of a version code.
           code=$(( $(date +%s) / 60 ))
           echo "name=$name" >> "$GITHUB_OUTPUT"
@@ -253,7 +276,7 @@ jobs:
           echo "apk=$apk"
           # Read the listing once; matching it with grep -q in a loop is fragile and slow for a 250 MB APK.
           unzip -Z1 "$apk" > "$RUNNER_TEMP/apk-files.txt"
-          for want in assets/rootfs.tgz assets/rootfs.stamp assets/bridge.js lib/arm64-v8a/libproot.so lib/arm64-v8a/libproot-loader.so lib/arm64-v8a/libtalloc.so lib/arm64-v8a/libandroid-shmem.so; do
+          for want in assets/rootfs.tgz assets/rootfs.stamp assets/bridge.js assets/sing-box-LICENSE.txt assets/vpn-default-nodes.txt lib/arm64-v8a/libproot.so lib/arm64-v8a/libproot-loader.so lib/arm64-v8a/libtalloc.so lib/arm64-v8a/libandroid-shmem.so lib/arm64-v8a/libsingbox.so; do
             if grep -qxF "$want" "$RUNNER_TEMP/apk-files.txt"; then echo "ok: $want"; else echo "::error::missing from the APK: $want"; exit 1; fi
           done
           apksigner="$(ls "${ANDROID_HOME:-/usr/local/lib/android/sdk}"/build-tools/*/apksigner | sort -V | tail -1)"

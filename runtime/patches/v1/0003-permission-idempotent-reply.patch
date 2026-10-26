@@ -1,0 +1,21 @@
+diff --git a/packages/opencode/src/permission/index.ts b/packages/opencode/src/permission/index.ts
+index 2e27ff2..31e91f7 100644
+--- a/packages/opencode/src/permission/index.ts
++++ b/packages/opencode/src/permission/index.ts
+@@ -109,7 +109,15 @@ const layer = Layer.effect(
+     const reply = Effect.fn("Permission.reply")(function* (input: PermissionV1.ReplyInput) {
+       const { approved, pending } = yield* InstanceState.get(state)
+       const existing = pending.get(input.requestID)
+-      if (!existing) return yield* new PermissionV1.NotFoundError({ requestID: input.requestID })
++      // A reply for a request that is no longer pending is treated as success: on a
++      // phone the dialog can outlive its request (a double-tap sends the reply twice,
++      // an "always" reply auto-settles the other pending asks of the same session, a
++      // reconnected event stream can show a stale ask). Failing here would surface
++      // "Permission request not found" for an answer the server already has.
++      if (!existing) {
++        yield* Effect.logInfo("reply for missing permission request", { requestID: input.requestID })
++        return
++      }
+ 
+       pending.delete(input.requestID)
+       yield* events.publish(Event.Replied, {

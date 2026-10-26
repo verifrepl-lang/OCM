@@ -32,9 +32,35 @@ class ServerService : Service() {
     private var wifi: WifiManager.WifiLock? = null
     private val crashes = ArrayDeque<Long>()
 
+    /** Absolute restart budget, independent of the 5-minute crash window. */
+    private var restarts = 0
+
+    /** Last time the server was seen healthy; long healthy stretches reset the restart budget. */
+    @Volatile
+    private var lastAliveAt = 0L
+
+    /** When the current run reached the healthy state; a long stretch from here resets the restart budget. */
+    @Volatile
+    private var runningSince = 0L
+
+    /** True while the running server was started with a local outbound proxy in its environment. */
+    @Volatile
+    private var proxied = false
+
+    /** True when that proxy came from a VPN subscription. */
+    @Volatile
+    private var subscriptionProxy = false
+
     /** Bumped on every start and stop so a watchdog or timer from an earlier run can tell it is stale. */
     @Volatile
     private var epoch = 0
+
+    /**
+     * Rotations of the VPN exit node in answer to a spent anonymous quota, newest last. A spent limit rotates the
+     * address at most a few times an hour: a limit that survives several fresh addresses is not about the address
+     * any more, and an endless restart loop would be worse than the honest error.
+     */
+    private val quotaRotations = ArrayDeque<Long>()
 
     private val updateTick = object : Runnable {
         override fun run() {
@@ -93,19 +119,26 @@ class ServerService : Service() {
         }
 
         when (intent?.action) {
-            ACTION_STOP -> run {
-                shutdown()
-                main.post {
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf()
-                }
+            ACTION_STOP -> {
+                // Never queue a stop behind a possibly hung start on the single worker thread: "stop" must stop
+                // now. A dedicated thread does the same idempotent shutdown; the in-flight start bails out on the
+                // next epoch check.
+                Thread {
+                    shutdown()
+                    main.post {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelf()
+                    }
+                }.apply { isDaemon = true }.start()
             }
             ACTION_SWITCH -> {
                 intent.getStringExtra(EXTRA_PROFILE)?.let { app.profiles.setActive(it) }
-                run { begin(apply = false) }
+                run { resetBudget(); begin(apply = false) }
             }
-            ACTION_RESTART -> run { begin(apply = false) }
-            ACTION_APPLY -> run { begin(apply = true) }
+            // A person's own retry gets a fresh restart budget; otherwise a server that crashed a few times over the
+            // last days would go straight back to the error screen on its next crash.
+            ACTION_RESTART -> run { resetBudget(); begin(apply = false) }
+            ACTION_APPLY -> run { resetBudget(); begin(apply = true) }
             else -> run { ensureRunning() }
         }
 
@@ -125,6 +158,7 @@ class ServerService : Service() {
         // The server belongs to this service; leaving it running without a notification would be a hidden process.
         Thread {
             runCatching { server.stop() }.onFailure { Log.w("service", "could not stop the server: ${it.message}") }
+            app.vpn.stop("service stopped")
         }.start()
 
         super.onDestroy()
@@ -132,6 +166,28 @@ class ServerService : Service() {
 
     // Lifecycle
     private fun baseFor(profile: Profile) = "http://127.0.0.1:${profile.port}"
+
+    private fun resetBudget() {
+        restarts = 0
+        crashes.clear()
+    }
+
+    /** Waits for [port] to be released (the previous server may still be exiting). True when it is free. */
+    private fun awaitPort(port: Int?): Boolean {
+        val wanted = port ?: return false
+        val deadline = System.currentTimeMillis() + 3_000
+
+        while (true) {
+            if (PortPicker.free(wanted)) return true
+            if (System.currentTimeMillis() >= deadline) return false
+
+            try {
+                Thread.sleep(150)
+            } catch (_: InterruptedException) {
+                return false
+            }
+        }
+    }
 
     private fun begin(apply: Boolean) {
         if (app.prefs.remote) startRemote() else startLocal(apply)
@@ -160,7 +216,8 @@ class ServerService : Service() {
         }
     }
 
-    private fun startLocal(apply: Boolean) {
+    /** [fromCrash]: a restart after a crash must not also swap in a freshly downloaded server build. */
+    private fun startLocal(apply: Boolean, fromCrash: Boolean = false) {
         val my = ++epoch
         var profile = app.profiles.active
         val password = app.prefs.password
@@ -194,6 +251,10 @@ class ServerService : Service() {
 
         // Every profile gets a port of its own. When something else on the phone already sits on it, the next
         // free port is taken and remembered, so the server starts anyway and the port stays individual.
+        // Our own previous server may still be letting go of the port; moving to another one now would be saved for
+        // good and change the web page's origin (and with it the page's stored data).
+        awaitPort(profile.port)
+
         var port = pickPort(profile)
 
         if (port == null) {
@@ -213,12 +274,35 @@ class ServerService : Service() {
 
         var base = baseFor(profile)
 
-        var otaDir = app.ota.prepareStart(profile, apply)
+        var otaDir = app.ota.prepareStart(profile, apply, auto = !fromCrash)
         var attempt = 0
         var shifts = 0
+        var compatRetried = false
 
         while (true) {
-            val config = server.config(app.prefs, profile, bridgeUrl, otaDir)
+            // The route must be ready before the server starts, because the server reads its proxy address from the
+            // environment at spawn time. A selected VPN subscription is mandatory - never fall back to a direct
+            // connection silently - and without one the server simply connects directly.
+            val useSubscription = app.prefs.vpnSubscriptionEnabled
+            val outboundProxy = try {
+                if (useSubscription) app.vpn.prepare() else null
+            } catch (e: Exception) {
+                Log.w("service", "outbound route preparation failed: ${e.message}")
+                proxied = false
+                subscriptionProxy = false
+                fail(
+                    tr("Не удалось подключить VPN-подписку: ", "Could not connect the VPN subscription: ") + (e.message ?: ""),
+                    false,
+                    profile,
+                )
+
+                return
+            }
+
+            proxied = outboundProxy != null
+            subscriptionProxy = useSubscription && outboundProxy != null
+
+            val config = server.config(app.prefs, profile, bridgeUrl, otaDir, outboundProxy)
             val process = try {
                 server.spawn(config)
             } catch (e: Exception) {
@@ -246,6 +330,13 @@ class ServerService : Service() {
 
             // Someone took the port between the check and the bind; move on to the next free one instead of failing.
             if (server.portWasBusy() && shifts < MAX_PORT_SHIFTS) {
+                // The holder may be the server just stopped: give it a moment and keep the port if it lets go.
+                if (awaitPort(port)) {
+                    shifts++
+
+                    continue
+                }
+
                 val next = pickPort(profile, port)
 
                 if (next != null) {
@@ -260,7 +351,7 @@ class ServerService : Service() {
                 }
             }
 
-            val (hint, compat) = server.failureHint(exit)
+            val (hint, compat) = server.failureHint(exit, app.prefs.compat)
 
             Log.w("service", "server did not become healthy (exit=$exit): ${hint.lines().firstOrNull().orEmpty()}")
 
@@ -271,6 +362,19 @@ class ServerService : Service() {
                 Notifier.update(this, tr("Новая версия сервера не запустилась, возвращена предыдущая.", "The new server build did not start, the previous one was restored."))
                 otaDir = app.ota.prepareStart(profile, apply = false)
                 attempt++
+
+                continue
+            }
+
+            // A proot segfault (signal 11) kills the server on a handful of devices; the compatibility loader fixes
+            // exactly that. Flip it on once and retry instead of leaving the person on the error screen - with the
+            // current traffic this is what most "сервер постоянно падает" reports come from.
+            if (!app.prefs.compat && server.crashedWithSegfault() && !compatRetried) {
+                app.prefs.compat = true
+                compatRetried = true
+
+                Log.w("service", "signal 11 crash: compatibility mode is on, retrying")
+                Notifier.update(this, tr("Сервер упал; включён режим совместимости, перезапускаю...", "The server crashed; compatibility mode is on, restarting..."))
 
                 continue
             }
@@ -313,6 +417,7 @@ class ServerService : Service() {
 
         quiet()
         server.stop()
+        app.vpn.stop("remote server selected")
 
         val base = Urls.normalizeServer(app.prefs.remoteUrl)
 
@@ -346,6 +451,8 @@ class ServerService : Service() {
     private fun onRunning(profile: Profile, base: String, password: String, local: Boolean) {
         val my = epoch
         val next = ServerState.snapshot.generation + 1
+        lastAliveAt = System.currentTimeMillis()
+        runningSince = lastAliveAt
 
         ServerState.update {
             it.copy(
@@ -371,6 +478,7 @@ class ServerService : Service() {
             { app.prefs.notifyEnabled },
             { app.inForeground },
             { app.guest.isPersonal(profile.id) },
+            onQuotaExhausted = { run { onQuotaExhausted() } },
         ).also { it.start() }
 
         if (local) {
@@ -383,13 +491,16 @@ class ServerService : Service() {
 
             app.syncAccountAsync()
             main.removeCallbacks(updateTick)
-            main.postDelayed(updateTick, 60_000)
+            // Not immediately: a fresh start coincides with the busiest network moment, and a check that fails on a
+            // dead link is pure noise; ten minutes in, the connection is settled.
+            main.postDelayed(updateTick, 10 * 60_000L)
         }
     }
 
     private fun watchdog(my: Int, base: String, password: String) {
         Thread({
             var misses = 0
+            var tunnelMisses = 0
 
             while (epoch == my) {
                 try {
@@ -400,8 +511,23 @@ class ServerService : Service() {
 
                 if (epoch != my) return@Thread
 
+                // A server that was told to use a proxy is useless once that proxy is dead for good (every model
+                // request would end in "connection refused"): start again, and the subscription's own probe decides
+                // whether the tunnel can come back at all.
+                if (proxied && subscriptionProxy && app.vpn.status.phase == VpnSubscriptionManager.Phase.FAILED) {
+                    if (++tunnelMisses >= 3) {
+                        Log.w("service", "the outbound proxy is down for good, restarting the server")
+                        run { if (epoch == my) startLocal(apply = false) }
+
+                        return@Thread
+                    }
+                } else {
+                    tunnelMisses = 0
+                }
+
                 if (server.health(base, password) == 200) {
                     misses = 0
+                    lastAliveAt = System.currentTimeMillis()
                 } else if (++misses >= 3) {
                     run { onCrash(my) }
 
@@ -411,10 +537,84 @@ class ServerService : Service() {
         }, "server-watchdog").apply { isDaemon = true; start() }
     }
 
+    /**
+     * An anonymous answer just died on a spent per-IP limit. With no account bound to the profile the limit belongs
+     * to the current exit address, so the app picks the next node of the VPN subscription and restarts the server
+     * through it - the fresh address comes with a fresh allowance. Anything less (a signed-in profile, no
+     * subscription, nothing to rotate to) is answered with an honest notification instead.
+     */
+    private fun onQuotaExhausted() {
+        val profile = runCatching { app.profiles.active }.getOrNull() ?: return
+
+        if (profile.account != null) return
+
+        if (!app.prefs.vpnSubscriptionEnabled) {
+            Notifier.update(
+                this,
+                tr(
+                    "Квота бесплатных моделей на этом IP исчерпана. Подключи аккаунт или включи VPN-подписку, чтобы менять адрес.",
+                    "The free-model quota for this IP is used up. Connect an account or enable the VPN subscription to change the address.",
+                ),
+            )
+
+            return
+        }
+
+        val now = System.currentTimeMillis()
+
+        while (quotaRotations.isNotEmpty() && now - quotaRotations.first() > QUOTA_ROTATION_WINDOW_MS) quotaRotations.removeFirst()
+
+        if (quotaRotations.isNotEmpty() && now - quotaRotations.last() < QUOTA_ROTATION_COOLDOWN_MS) return
+
+        if (quotaRotations.size >= QUOTA_ROTATION_MAX) {
+            Notifier.update(
+                this,
+                tr(
+                    "Квота исчерпана и не снялась сменой адреса. Подожди сброса или подключи аккаунт с личным лимитом.",
+                    "The quota is used up and changing the address did not help. Wait for the reset or connect an account with a limit of its own.",
+                ),
+            )
+
+            return
+        }
+
+        val nodes = app.vpn.nodes()
+
+        if (nodes.size < 2) {
+            Notifier.update(
+                this,
+                tr(
+                    "Квота IP исчерпана. В подписке один сервер - добавить адреса некуда, поэтому приложение работает как есть.",
+                    "The IP quota is used up. The subscription has a single server, so there is no other address to switch to.",
+                ),
+            )
+
+            return
+        }
+
+        val node = app.vpn.rotateToNext() ?: return
+
+        quotaRotations.addLast(now)
+        Log.i("service", "anonymous quota spent: rotating the exit node to ${node.name} and restarting the server")
+        Notifier.update(
+            this,
+            tr("Квота IP исчерпана: меняю адрес на ", "The IP quota is used up: switching the address to ") + node.name,
+        )
+
+        // The new node only takes effect through a server restart, because the process read its proxy address from
+        // the environment at spawn time.
+        resetBudget()
+        begin(apply = false)
+    }
+
     private fun onCrash(my: Int) {
         if (epoch != my) return
 
         val now = System.currentTimeMillis()
+
+        // A crash after a long healthy stretch starts a fresh restart budget: how long this run stayed up, not how
+        // long ago it was last seen up (that is always seconds).
+        if (runningSince > 0 && lastAliveAt - runningSince > 10 * 60_000L) restarts = 0
 
         crashes.addLast(now)
 
@@ -422,15 +622,55 @@ class ServerService : Service() {
 
         val profile = app.profiles.active
 
-        Log.w("service", "the server stopped answering (${crashes.size} in 5 minutes)")
+        Log.w("service", "the server stopped answering (${crashes.size} in 5 minutes, $restarts in this run)")
 
         if (app.ota.trial) {
             app.ota.failTrial(profile)
             Notifier.update(this, tr("Новая версия сервера работала нестабильно, возвращена предыдущая.", "The new server build was unstable, the previous one was restored."))
         }
 
+        // Signal 11 on the very first crash: the compatibility mode is what fixes it, so do not burn minutes (and the
+        // restart budget) on crashes that cannot end differently.
+        if (!app.prefs.compat && server.crashedWithSegfault()) {
+            app.prefs.compat = true
+            crashes.clear()
+
+            Log.w("service", "signal 11 crash: compatibility mode is on, restarting")
+            Notifier.update(this, tr("Сервер упал; включён режим совместимости, перезапускаю...", "The server crashed; compatibility mode is on, restarting..."))
+            run { startLocal(apply = false, fromCrash = true) }
+
+            return
+        }
+
+        // Absolute budget: a server dying every minute never fills the 5-minute window, so without this the
+        // service would restart all night long - battery, traffic, notification spam.
+        if (++restarts > MAX_RESTARTS) {
+            epoch++
+            quiet()
+            server.stop()
+
+            val (hint, compat) = server.failureHint(null, app.prefs.compat)
+
+            fail(tr("Сервер падает снова и снова. ", "The server keeps crashing over and over. ") + hint, compat, profile)
+
+            return
+        }
+
         if (crashes.size > 3) {
-            val (hint, compat) = server.failureHint(null)
+            // The watchdog flavour of the same signal 11 problem: one self-heal attempt with the compatibility loader
+            // before giving up, so an overnight crash loop ends in a working server instead of an error screen.
+            if (!app.prefs.compat && server.crashedWithSegfault()) {
+                app.prefs.compat = true
+                crashes.clear()
+
+                Log.w("service", "crash loop with signal 11: compatibility mode is on, restarting")
+                Notifier.update(this, tr("Сервер падал; включён режим совместимости, перезапускаю...", "The server kept crashing; compatibility mode is on, restarting..."))
+                run { startLocal(apply = false, fromCrash = true) }
+
+                return
+            }
+
+            val (hint, compat) = server.failureHint(null, app.prefs.compat)
 
             epoch++
             quiet()
@@ -440,7 +680,9 @@ class ServerService : Service() {
             return
         }
 
-        startLocal(apply = false)
+        // Respawn through the worker queue, not on this watchdog thread: it serializes with other starts/stops and
+        // an uncaught error here would take the whole process down.
+        run { startLocal(apply = false, fromCrash = true) }
     }
 
     private fun shutdown() {
@@ -585,6 +827,19 @@ class ServerService : Service() {
 
         /** How many times a start may move to the next port after the server found its port taken. */
         private const val MAX_PORT_SHIFTS = 4
+
+        /** Absolute restart attempts allowed before showing the error screen instead of restarting again. */
+        private const val MAX_RESTARTS = 6
+
+        /** Two quota rotations may not be closer together than this, so a flapping error cannot spin the server. */
+        private const val QUOTA_ROTATION_COOLDOWN_MS = 90_000L
+
+        /** Rotations older than this leave the budget, one fresh allowance per window. */
+        private const val QUOTA_ROTATION_WINDOW_MS = 60 * 60_000L
+
+        /** Address changes per window at most: a limit that survives this many fresh addresses is not about the address. */
+        private const val QUOTA_ROTATION_MAX = 6
+
         const val ACTION_STOP = "dev.opencode.mobile.STOP"
         const val ACTION_RESTART = "dev.opencode.mobile.RESTART"
         const val ACTION_APPLY = "dev.opencode.mobile.APPLY_UPDATE"
