@@ -39,6 +39,31 @@ class JsBridge(private val activity: MainActivity) {
         activity.runOnUiThread { Browser.copy(activity, "OpenCode", text) }
     }
 
+    /**
+     * The page hit a limit error: rebuild the WARP tunnel on a fresh identity so Cloudflare hands out a different
+     * egress address, which is what the shared anonymous free limits are counted against. Without a running tunnel
+     * (WARP off) there is nothing to refresh and the page just shows its hint as before. The result is a toast.
+     */
+    @JavascriptInterface
+    fun rotateWarp() {
+        val app = activity.applicationContext as App
+
+        if (!app.warp.listening()) return
+
+        app.warp.rotate("page limit error") { ok ->
+            activity.runOnUiThread {
+                Ui.toast(
+                    activity,
+                    if (ok) {
+                        tr("WARP: адрес сменён, отправьте запрос ещё раз", "WARP: the address changed, send the request again")
+                    } else {
+                        tr("WARP не смог сменить адрес", "WARP could not change the address")
+                    },
+                )
+            }
+        }
+    }
+
     @JavascriptInterface
     fun openPreview(url: String) {
         activity.runOnUiThread { activity.showPreview(url) }

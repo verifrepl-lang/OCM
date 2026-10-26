@@ -263,6 +263,23 @@
   var REGION = /(regionerror|not\s+available\s+in\s+your\s+country|\u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430\s+\u0432\s+\u0432\u0430\u0448\u0435\u0439\s+\u0441\u0442\u0440\u0430\u043d\u0435)/i;
   var quotaHandled = new WeakSet();
 
+  // A spent shared per-IP bucket is what this app's WARP tunnel is for: rotating the tunnel gives the next request
+  // a fresh Cloudflare egress address. Fired at most once per cooldown so a page full of identical errors cannot
+  // hammer the re-registration.
+  var lastRotate = 0;
+
+  function maybeRotateWarp() {
+    var now = Date.now();
+
+    if (now - lastRotate < 180000) return;
+
+    lastRotate = now;
+
+    try {
+      if (typeof native !== "undefined" && native.rotateWarp) native.rotateWarp();
+    } catch (e) {}
+  }
+
   // The sign-in offer only makes sense when this profile has no Console account yet; the native side knows the
   // state and the page cannot see it. Older app builds without the method read as "no account".
   function hasAccount() {
@@ -388,6 +405,8 @@
     if (!parent || quotaHandled.has(parent)) return;
 
     quotaHandled.add(parent);
+
+    maybeRotateWarp();
 
     // One hint per error block, and never a second one after a re-render that left ours in place.
     var next = parent.nextElementSibling;

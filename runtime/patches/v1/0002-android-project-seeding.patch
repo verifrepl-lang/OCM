@@ -1,27 +1,35 @@
 diff --git a/packages/app/src/context/global.tsx b/packages/app/src/context/global.tsx
-index 8343889..0c3ae5b 100644
+index 8343889..ce7c43c 100644
 --- a/packages/app/src/context/global.tsx
 +++ b/packages/app/src/context/global.tsx
-@@ -140,6 +140,70 @@ function createServerCtx(
+@@ -140,6 +140,91 @@ function createServerCtx(
    const isLocal =
      (conn?.type === "sidecar" && conn.variant === "base") || (conn?.type === "http" && isLocalHost(conn.http.url))
  
-+  // OpenCode for Android: the app binds the phone's shared storage at /sdcard and
-+  // the projects a person already had live under /sdcard/Проекты. The web UI keeps
-+  // its sidebar list in browser storage, so a fresh install (or a switch between
-+  // server lines) starts with an empty sidebar. When nothing else is there, put
-+  // the phone's own project folders back once.
++  // OpenCode for Android: the app binds the phone's shared storage at /sdcard and the guest home at /root, and the
++  // projects a person already had live under those. The web UI keeps its sidebar list in browser storage, so a
++  // fresh install (or a switch between server lines) starts with an empty sidebar - and an old install can carry
++  // a stale entry like /root/.cache, which the earlier server lines opened as the project. When nothing else is
++  // there, drop the stale entry and put the phone's own folders back once.
 +  if (isLocal) {
 +    let seeded = false
 +    createEffect(() => {
 +      if (seeded) return
-+      if (projects.list().length > 0) {
++      const stale = projects
++        .list()
++        .map((project) => project.worktree)
++        .filter((worktree) => worktree.endsWith("/.cache") || worktree === "/root/.cache")
++      const real = projects.list().filter((project) => !stale.includes(project.worktree))
++
++      for (const worktree of stale) projects.remove(worktree)
++
++      if (real.length > 0) {
 +        seeded = true
 +        return
 +      }
-+      // Closed on purpose earlier in this browser: re-adding would undo the user's
-+      // own cleanup, so leave the sidebar alone.
-+      if (projects.recentlyClosed().some((worktree) => worktree.startsWith("/sdcard/"))) {
++      // Closed on purpose earlier in this browser: re-adding would undo the user's own cleanup, so leave the
++      // sidebar alone.
++      if (projects.recentlyClosed().some((worktree) => worktree.startsWith("/sdcard/") || worktree === "/root")) {
 +        seeded = true
 +        return
 +      }
@@ -42,6 +50,20 @@ index 8343889..0c3ae5b 100644
 +          node.name ?? node.path.replace(/^\/+|\/+$/g, "").split("/").pop() ?? ""
 +
 +        try {
++          const home = await list("/root")
++          const homeFolders = home
++            .filter((node) => node.type === "directory" && !baseName(node).startsWith("."))
++            .filter((node) => !node.ignored)
++            .slice(0, 8)
++
++          // open() prepends, so the root goes in last to sit on top of the list.
++          for (const node of [...homeFolders].reverse()) {
++            const worktree = node.absolute ?? `${"/root"}/${baseName(node)}`
++            projects.open(worktree)
++            projects.collapse(worktree)
++          }
++          projects.open("/root")
++
 +          const shared = await list("/sdcard")
 +          const folder = ["Проекты", "Projects"].find((candidate) =>
 +            shared.some((node) => node.type === "directory" && baseName(node) === candidate),
@@ -55,7 +77,6 @@ index 8343889..0c3ae5b 100644
 +            .filter((node) => !node.ignored)
 +            .slice(0, 8)
 +
-+          // open() prepends, so the root goes in last to sit on top of the list.
 +          for (const node of [...subprojects].reverse()) {
 +            const worktree = node.absolute ?? `${root}/${baseName(node)}`
 +            projects.open(worktree)
@@ -63,8 +84,8 @@ index 8343889..0c3ae5b 100644
 +          }
 +          projects.open(root)
 +        } catch {
-+          // No /sdcard on this server (desktop, plain browser) or the listing
-+          // failed: leave the project list exactly as it was.
++          // No /root or /sdcard on this server (desktop, plain browser) or the listing failed: leave the project
++          // list exactly as it was.
 +        }
 +      })()
 +    })
@@ -73,3 +94,27 @@ index 8343889..0c3ae5b 100644
    return {
      queryClient,
      sdk,
+diff --git a/packages/app/src/pages/layout.tsx b/packages/app/src/pages/layout.tsx
+index 98548ab..6e721b1 100644
+--- a/packages/app/src/pages/layout.tsx
++++ b/packages/app/src/pages/layout.tsx
+@@ -544,11 +544,16 @@ export default function LegacyLayout(props: ParentProps) {
+     const list = layout.projects.list()
+     const last = server.projects.last()
+ 
++    // An old install can carry a stale lastProject (the earlier server lines opened the guest's own
++    // /root/.cache); never resurrect it - the seeding in global.tsx provides the real folders instead.
++    const stale = (directory: string) => directory.endsWith("/.cache")
++    const lastFresh = last && !stale(last) ? last : undefined
++
+     if (list.length === 0) {
+-      if (!last) return
+-      await openProject(last, true)
++      if (!lastFresh) return
++      await openProject(lastFresh, true)
+     } else {
+-      const next = list.find((project) => project.worktree === last) ?? list[0]
++      const next = (lastFresh && list.find((project) => project.worktree === lastFresh)) ?? list.find((project) => !stale(project.worktree)) ?? list[0]
+       if (!next) return
+       await openProject(next.worktree, true)
+     }

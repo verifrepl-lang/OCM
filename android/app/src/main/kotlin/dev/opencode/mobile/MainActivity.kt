@@ -546,6 +546,11 @@ class MainActivity : Activity(), UiHost {
 
         items += tr("Коннекторы и модели", "Connectors and models") to { startActivity(Intent(this, ConnectorsActivity::class.java)) }
         items += tr("Плагины и правила", "Plugins and rules") to { startActivity(Intent(this, PluginsActivity::class.java)) }
+        items += warpMenuTitle() to { toggleWarp() }
+
+        // The rotation only makes sense while the tunnel can come back; without the binary there is nothing to rotate.
+        if (app.prefs.warpEnabled && app.warp.status.hasAccount) items += tr("Сменить IP (WARP)", "Change the IP (WARP)") to { rotateWarp() }
+        items += tr("Мой IP...", "My IP...") to { showIp() }
         items += tr("Открыть адрес в окне предпросмотра", "Open an address in a preview window") to {
             Ui.input(this, tr("Адрес или порт", "Address or port"), "localhost:5173") { value -> if (value.isNotEmpty()) showPreview(value) }
         }
@@ -560,6 +565,75 @@ class MainActivity : Activity(), UiHost {
         items += tr("Настройки", "Settings") to { startActivity(Intent(this, SettingsActivity::class.java)) }
 
         Ui.choose(this, "OpenCode", items.map { it.first }) { items[it].second() }
+    }
+
+    /** The WARP line of the floating menu: the current state in the title, a tap flips it. */
+    private fun warpMenuTitle(): String {
+        val app = application as App
+
+        if (!app.prefs.warpEnabled) return tr("WARP: выключен", "WARP: off")
+
+        return when (app.warp.status.phase) {
+            WarpManager.Phase.RUNNING -> tr("WARP: работает", "WARP: running")
+            WarpManager.Phase.PREPARING -> tr("WARP: подключается...", "WARP: connecting...")
+            WarpManager.Phase.FAILED -> tr("WARP: ошибка", "WARP: failed")
+            else -> tr("WARP: включён, туннель поднимется с сервером", "WARP: on, the tunnel comes up with the server")
+        }
+    }
+
+    /** Flips the WARP setting; a running server restarts so the route reaches its environment. */
+    private fun toggleWarp() {
+        val app = application as App
+        val enabling = !app.prefs.warpEnabled
+
+        app.prefs.warpEnabled = enabling
+
+        if (!enabling) {
+            app.warp.stop("WARP disabled in the menu")
+            Ui.toast(this, tr("WARP выключен", "WARP is off"))
+        } else if (ServerState.snapshot.phase == Phase.RUNNING) {
+            Ui.toast(this, tr("WARP включён: перезапускаю сервер", "WARP is on: restarting the server"))
+            ServerService.send(this, ServerService.ACTION_RESTART)
+        } else {
+            Ui.toast(this, tr("WARP включён", "WARP is on"))
+        }
+    }
+
+    /** A fresh WARP identity, i.e. a fresh egress address for the spent shared free limit. */
+    private fun rotateWarp() {
+        val app = application as App
+
+        Ui.toast(this, tr("Меняю WARP-адрес...", "Changing the WARP address..."))
+        app.warp.rotate("menu") { ok ->
+            runOnUiThread {
+                Ui.toast(
+                    this,
+                    if (ok) tr("WARP: адрес сменён, отправьте запрос ещё раз", "WARP: the address changed, send the request again")
+                    else tr("WARP не смог сменить адрес", "WARP could not change the address"),
+                )
+            }
+        }
+    }
+
+    /** The current egress address and the previous ones, each with its country and city. */
+    private fun showIp() {
+        val app = application as App
+        val records = app.warp.history()
+
+        if (records.isEmpty()) {
+            Ui.message(this, tr("Мой IP", "My IP"), tr("Пока пусто: включи WARP и подожди, пока туннель поднимется.", "Nothing yet: turn WARP on and wait for the tunnel to come up."))
+
+            return
+        }
+
+        val lines = records.mapIndexed { index, record ->
+            val where = listOf(record.country, record.city).filter { it.isNotBlank() }.joinToString(", ")
+            val place = if (where.isBlank()) "" else " · $where"
+
+            (if (index == 0) "• " else "   ") + record.ip + place
+        }
+
+        Ui.message(this, tr("Мой IP", "My IP"), lines.joinToString("\n"))
     }
 
     private fun chooseProfile() {

@@ -51,6 +51,10 @@ class ServerService : Service() {
     @Volatile
     private var subscriptionProxy = false
 
+    /** True when that proxy is the WARP tunnel. */
+    @Volatile
+    private var warpProxy = false
+
     /** Bumped on every start and stop so a watchdog or timer from an earlier run can tell it is stale. */
     @Volatile
     private var epoch = 0
@@ -159,6 +163,7 @@ class ServerService : Service() {
         Thread {
             runCatching { server.stop() }.onFailure { Log.w("service", "could not stop the server: ${it.message}") }
             app.vpn.stop("service stopped")
+            app.warp.stop("service stopped")
         }.start()
 
         super.onDestroy()
@@ -282,16 +287,22 @@ class ServerService : Service() {
         while (true) {
             // The route must be ready before the server starts, because the server reads its proxy address from the
             // environment at spawn time. A selected VPN subscription is mandatory - never fall back to a direct
-            // connection silently - and without one the server simply connects directly.
+            // connection silently. Without one the WARP tunnel is tried when it is enabled, and only when neither
+            // route is on the server simply connects directly.
             val useSubscription = app.prefs.vpnSubscriptionEnabled
+            val useWarp = !useSubscription && app.prefs.warpEnabled
             val outboundProxy = try {
-                if (useSubscription) app.vpn.prepare() else null
+                if (useSubscription) app.vpn.prepare() else if (useWarp) app.warp.prepare(profile) else null
             } catch (e: Exception) {
                 Log.w("service", "outbound route preparation failed: ${e.message}")
                 proxied = false
                 subscriptionProxy = false
+                warpProxy = false
                 fail(
-                    tr("Не удалось подключить VPN-подписку: ", "Could not connect the VPN subscription: ") + (e.message ?: ""),
+                    tr(
+                        "Не удалось подключить исходящий маршрут (VPN/WARP): ",
+                        "Could not connect the outbound route (VPN/WARP): ",
+                    ) + (e.message ?: ""),
                     false,
                     profile,
                 )
@@ -301,6 +312,7 @@ class ServerService : Service() {
 
             proxied = outboundProxy != null
             subscriptionProxy = useSubscription && outboundProxy != null
+            warpProxy = useWarp && outboundProxy != null
 
             val config = server.config(app.prefs, profile, bridgeUrl, otaDir, outboundProxy)
             val process = try {
@@ -418,6 +430,7 @@ class ServerService : Service() {
         quiet()
         server.stop()
         app.vpn.stop("remote server selected")
+        app.warp.stop("remote server selected")
 
         val base = Urls.normalizeServer(app.prefs.remoteUrl)
 
@@ -521,6 +534,13 @@ class ServerService : Service() {
 
                         return@Thread
                     }
+                } else if (proxied && warpProxy && app.warp.status.phase == WarpManager.Phase.FAILED) {
+                    if (++tunnelMisses >= 3) {
+                        Log.w("service", "the WARP tunnel is down for good, restarting the server")
+                        run { if (epoch == my) startLocal(apply = false) }
+
+                        return@Thread
+                    }
                 } else {
                     tunnelMisses = 0
                 }
@@ -547,6 +567,38 @@ class ServerService : Service() {
         val profile = runCatching { app.profiles.active }.getOrNull() ?: return
 
         if (profile.account != null) return
+
+        // WARP gives the request a fresh Cloudflare egress address without touching the server: the proxy address in
+        // its environment (127.0.0.1) stays the same, only the tunnel behind it is rebuilt on a new identity.
+        if (!app.prefs.vpnSubscriptionEnabled && app.prefs.warpEnabled) {
+            val now = System.currentTimeMillis()
+
+            while (quotaRotations.isNotEmpty() && now - quotaRotations.first() > QUOTA_ROTATION_WINDOW_MS) quotaRotations.removeFirst()
+
+            if (quotaRotations.isNotEmpty() && now - quotaRotations.last() < QUOTA_ROTATION_COOLDOWN_MS) return
+
+            if (quotaRotations.size >= QUOTA_ROTATION_MAX) return
+
+            quotaRotations.addLast(now)
+            Log.i("service", "anonymous quota spent: rotating the WARP egress address")
+            Notifier.update(
+                this,
+                tr("Квота исчерпана: меняю WARP-адрес...", "The quota is used up: changing the WARP address..."),
+            )
+            app.warp.rotate("quota exhausted") { ok ->
+                if (!ok) return@rotate
+
+                Notifier.update(
+                    this,
+                    tr(
+                        "WARP-адрес сменён, отправь запрос ещё раз",
+                        "The WARP address changed, send the request again",
+                    ),
+                )
+            }
+
+            return
+        }
 
         if (!app.prefs.vpnSubscriptionEnabled) {
             Notifier.update(

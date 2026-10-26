@@ -1,0 +1,228 @@
+diff --git a/packages/app/src/components/dialog-settings.tsx b/packages/app/src/components/dialog-settings.tsx
+index b554fa7..38dc892 100644
+--- a/packages/app/src/components/dialog-settings.tsx
++++ b/packages/app/src/components/dialog-settings.tsx
+@@ -1,4 +1,4 @@
+-import { Component, createSignal, startTransition } from "solid-js"
++import { Component, Show, createSignal, onCleanup, onMount, startTransition } from "solid-js"
+ import { Dialog } from "@opencode-ai/ui/dialog"
+ import { Tabs } from "@opencode-ai/ui/tabs"
+ import { Icon } from "@opencode-ai/ui/icon"
+@@ -17,6 +17,21 @@ export const DialogSettings: Component<{ defaultValue?: string }> = (props) => {
+   const dialog = useDialog()
+   const [tab, setTab] = createSignal(props.defaultValue ?? "general")
+ 
++  // A phone cannot afford the desktop's vertical sidebar: 150px of list leaves no room for the content. Below
++  // the sm breakpoint the tabs run horizontally on top and the section captions step aside.
++  const [narrow, setNarrow] = createSignal(false)
++
++  onMount(() => {
++    const query = window.matchMedia("(max-width: 640px)")
++
++    setNarrow(query.matches)
++
++    const onChange = (event: MediaQueryListEvent) => setNarrow(event.matches)
++
++    query.addEventListener("change", onChange)
++    onCleanup(() => query.removeEventListener("change", onChange))
++  })
++
+   const showProviders = () => {
+     void dialog.show(() => <DialogSettings defaultValue="providers" />)
+   }
+@@ -24,18 +39,19 @@ export const DialogSettings: Component<{ defaultValue?: string }> = (props) => {
+   return (
+     <Dialog size="x-large" transition>
+       <Tabs
+-        orientation="vertical"
++        orientation={narrow() ? "horizontal" : "vertical"}
+         variant="settings"
+         value={tab()}
+         onChange={(value) => void startTransition(() => setTab(value))}
+         class="h-full settings-dialog"
+       >
+         <Tabs.List>
+-          <div class="flex flex-col justify-between h-full w-full gap-4">
+-            <div class="flex flex-col gap-3 w-full pt-3">
+-              <div class="flex flex-col gap-3">
+-                <div class="flex flex-col gap-1.5">
++          <div class={narrow() ? "flex w-full flex-row items-center gap-1 overflow-x-auto no-scrollbar py-2" : "flex flex-col justify-between h-full w-full gap-4"}>
++            <div class={narrow() ? "flex flex-row items-center gap-3 w-full pt-2" : "flex flex-col gap-3 w-full pt-3"}>
++              <div class={narrow() ? "flex flex-row items-center gap-1" : "flex flex-col gap-1.5"}>
++                <Show when={!narrow()}>
+                   <Tabs.SectionTitle>{language.t("settings.section.desktop")}</Tabs.SectionTitle>
++                </Show>
+                   <div class="flex flex-col gap-1.5 w-full">
+                     <Tabs.Trigger value="general">
+                       <Icon name="sliders" />
+@@ -49,11 +65,12 @@ export const DialogSettings: Component<{ defaultValue?: string }> = (props) => {
+                       <Icon name="server" />
+                       {language.t("status.popover.tab.servers")}
+                     </Tabs.Trigger>
+-                  </div>
+-                </div>
++              </div>
+ 
+-                <div class="flex flex-col gap-1.5">
++              <div class={narrow() ? "flex flex-row items-center gap-1" : "flex flex-col gap-1.5"}>
++                <Show when={!narrow()}>
+                   <Tabs.SectionTitle>{language.t("settings.section.server")}</Tabs.SectionTitle>
++                </Show>
+                   <div class="flex flex-col gap-1.5 w-full">
+                     <Tabs.Trigger value="providers">
+                       <Icon name="providers" />
+@@ -67,10 +84,12 @@ export const DialogSettings: Component<{ defaultValue?: string }> = (props) => {
+                 </div>
+               </div>
+             </div>
+-            <div class="flex flex-col gap-1 pl-1 py-1 text-12-medium text-text-weak">
+-              <span>{language.t("app.name.desktop")}</span>
+-              <span class="text-11-regular">v{platform.version}</span>
+-            </div>
++            <Show when={!narrow()}>
++              <div class="flex flex-col gap-1 pl-1 py-1 text-12-medium text-text-weak">
++                <span>{language.t("app.name.desktop")}</span>
++                <span class="text-11-regular">v{platform.version}</span>
++              </div>
++            </Show>
+           </div>
+         </Tabs.List>
+         <Tabs.Content value="general" class="no-scrollbar">
+diff --git a/packages/app/src/components/session/session-header.tsx b/packages/app/src/components/session/session-header.tsx
+index dc6cdaa..e707261 100644
+--- a/packages/app/src/components/session/session-header.tsx
++++ b/packages/app/src/components/session/session-header.tsx
+@@ -461,23 +461,6 @@ export function SessionHeader() {
+                       </Button>
+                     </TooltipKeybind>
+ 
+-                    <div class="hidden md:flex items-center gap-1 shrink-0">
+-                      <TooltipKeybind
+-                        title={language.t("command.review.toggle")}
+-                        keybind={command.keybind("review.toggle")}
+-                      >
+-                        <Button
+-                          variant="ghost"
+-                          class="group/review-toggle titlebar-icon w-8 h-6 p-0 box-border"
+-                          onClick={() => view().reviewPanel.toggle()}
+-                          aria-label={language.t("command.review.toggle")}
+-                          aria-expanded={view().reviewPanel.opened()}
+-                          aria-controls="review-panel"
+-                        >
+-                          <Icon size="small" name={view().reviewPanel.opened() ? "review-active" : "review"} />
+-                        </Button>
+-                      </TooltipKeybind>
+-
+                       <TooltipKeybind
+                         title={language.t("command.fileTree.toggle")}
+                         keybind={command.keybind("fileTree.toggle")}
+@@ -502,6 +485,24 @@ export function SessionHeader() {
+                           </div>
+                         </Button>
+                       </TooltipKeybind>
++
++                    <div class="hidden md:flex items-center gap-1 shrink-0">
++                      <TooltipKeybind
++                        title={language.t("command.review.toggle")}
++                        keybind={command.keybind("review.toggle")}
++                      >
++                        <Button
++                          variant="ghost"
++                          class="group/review-toggle titlebar-icon w-8 h-6 p-0 box-border"
++                          onClick={() => view().reviewPanel.toggle()}
++                          aria-label={language.t("command.review.toggle")}
++                          aria-expanded={view().reviewPanel.opened()}
++                          aria-controls="review-panel"
++                        >
++                          <Icon size="small" name={view().reviewPanel.opened() ? "review-active" : "review"} />
++                        </Button>
++                      </TooltipKeybind>
++
+                     </div>
+                   </div>
+                 </div>
+diff --git a/packages/app/src/components/titlebar-tab-nav.css b/packages/app/src/components/titlebar-tab-nav.css
+index 93834b5..f63e0bc 100644
+--- a/packages/app/src/components/titlebar-tab-nav.css
++++ b/packages/app/src/components/titlebar-tab-nav.css
+@@ -86,6 +86,29 @@
+   );
+ }
+ 
++/* On Android the overflow probe can miss (fonts measure differently inside the WebView), so the end fade and
++   a reserved strip for the close button apply to every tab, not only the ones that reported an overflow. Short
++   titles end long before the fade region, so the only visible change is that a long title can never run under
++   the close button again. */
++[data-titlebar-tab]:not([data-editing="true"]) [data-slot="tab-link"] {
++  --tab-title-fade-offset: 24px;
++  padding-inline-end: 16px;
++  -webkit-mask-image: linear-gradient(
++    to right,
++    black 0,
++    black calc(100% - var(--tab-title-fade-offset) - 16px),
++    transparent calc(100% - var(--tab-title-fade-offset)),
++    transparent 100%
++  );
++  mask-image: linear-gradient(
++    to right,
++    black 0,
++    black calc(100% - var(--tab-title-fade-offset) - 16px),
++    transparent calc(100% - var(--tab-title-fade-offset)),
++    transparent 100%
++  );
++}
++
+ [data-titlebar-tab][data-title-overflow="true"]:not([data-editing="true"]):dir(rtl) [data-slot="tab-link"] {
+   -webkit-mask-image: linear-gradient(
+     to left,
+diff --git a/packages/app/src/index.css b/packages/app/src/index.css
+index 78a9e10..409255f 100644
+--- a/packages/app/src/index.css
++++ b/packages/app/src/index.css
+@@ -328,3 +328,18 @@
+     }
+   }
+ }
++
++/* OpenCode for Android: below the md breakpoint the side panels are desktop luxuries the chat cannot share its
++   width with. The file tree (the session's file list with its "All files" tab) opens as an overlay on the right
++   instead of squeezing the conversation, so the phone gets the same file browser without a redesign. */
++@media (max-width: 767px) {
++  #file-tree-panel {
++    position: absolute !important;
++    inset-block: 0 !important;
++    inset-inline-end: 0 !important;
++    width: min(85%, 340px) !important;
++    z-index: 30;
++    box-shadow: var(--shadow-lg-border-base);
++    background: var(--surface-raised-stronger-non-alpha);
++  }
++}
+diff --git a/packages/app/src/pages/new-session/new-session-view.tsx b/packages/app/src/pages/new-session/new-session-view.tsx
+index 5960e64..1c4df4e 100644
+--- a/packages/app/src/pages/new-session/new-session-view.tsx
++++ b/packages/app/src/pages/new-session/new-session-view.tsx
+@@ -122,7 +122,7 @@ function ProviderTip() {
+ 
+   return (
+     <Show when={presence.present()}>
+-      <div class="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center px-10">
++      <div class="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center px-10 [@media(max-height:540px)]:hidden">
+         <div
+           ref={setRef}
+           data-component="provider-tip"
+diff --git a/packages/ui/src/components/dialog.css b/packages/ui/src/components/dialog.css
+index f17232c..5d7540b 100644
+--- a/packages/ui/src/components/dialog.css
++++ b/packages/ui/src/components/dialog.css
+@@ -62,6 +62,10 @@
+ 
+         [data-slot="dialog-title"] {
+           color: var(--text-strong);
++          min-width: 0;
++          overflow: hidden;
++          text-overflow: ellipsis;
++          white-space: nowrap;
+ 
+           /* text-16-medium */
+           font-family: var(--font-family-sans);

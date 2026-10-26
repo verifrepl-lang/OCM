@@ -1057,6 +1057,8 @@ fun main(args: Array<String>) {
     testNetworkFeatures()
     testGithubPlugins()
     testGuestAccounts()
+    testWarp()
+    testWarpHistory()
 
     println("passed: $passed, failed: ${failures.size}")
     failures.forEach { println("FAIL: $it") }
@@ -1215,4 +1217,277 @@ fun testGithubPlugins() {
     eq("listing keeps plugin files only, sorted", GithubPlugins.candidates(listing).map { it.name }, listOf("a.ts", "b.js"))
     eq("single-file reply has no candidates", GithubPlugins.candidates("{\"name\":\"a.js\",\"type\":\"file\"}"), emptyList<GithubPlugins.Candidate>())
     eq("garbage has no candidates", GithubPlugins.candidates("not json"), emptyList<GithubPlugins.Candidate>())
+}
+
+// The Cloudflare WARP tunnel: keys, registration, the wireproxy config, the trace and the sweep. (Task 13)
+
+fun hex(text: String) = text.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+
+fun toHex(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it) }
+
+fun testWarp() {
+    // RFC 7748 section 5.2 test vectors for X25519.
+    eq(
+        "x25519 vector 1",
+        toHex(Warp.scalarMult(hex("a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4"), hex("e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c"))),
+        "c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552",
+    )
+    eq(
+        "x25519 vector 2",
+        toHex(Warp.scalarMult(hex("4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d"), hex("e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493"))),
+        "95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957",
+    )
+
+    // A key pair must agree as Diffie-Hellman: both sides derive the same shared secret.
+    val (privA, pubA) = Warp.keygen()
+    val (privB, pubB) = Warp.keygen()
+
+    // The Cloudflare API and wireproxy both want STANDARD base64 (44 chars with padding), not base64url.
+    eq("keygen b64 length", privA.length, 44)
+    eq("keygen b64 padding", privA.last(), '=')
+    eq("keygen raw size", Warp.b64Bytes(privA).size, 32)
+
+    eq(
+        "x25519 shared secret agrees",
+        toHex(Warp.scalarMult(Warp.b64Bytes(privA), Warp.b64Bytes(pubB))),
+        toHex(Warp.scalarMult(Warp.b64Bytes(privB), Warp.b64Bytes(pubA))),
+    )
+    eq("public key derives from private", toHex(Warp.publicKey(Warp.b64Bytes(privA))), toHex(Warp.b64Bytes(pubA)))
+
+    // The 6.x reply shape: the interface lives in config.client.interface, the endpoint host carries the port.
+    val reply = """
+        {"id":"warp-id-1","account_type":"free","config":{"client_id":"aGVsbG8","peers":[{"public_key":"bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=","endpoint":{"v4":"162.159.192.1:2408","v6":"[2606:4700:d0::a29f:c001]:2408","host":"162.159.192.1:2408"}}],"client":{"interface":{"addresses":{"v4":"172.16.0.2","v6":"2606:4700:110:8a5c:1a2b:3c4d:5e6f:7a8b/128"}}}},"key":"$pubA"}
+    """.trimIndent()
+
+    val account = Warp.parseRegistration(reply, privA)
+
+    eq("account id", account.id, "warp-id-1")
+    eq("account v4", account.addressV4, "172.16.0.2")
+    eq("account v6", account.addressV6, "2606:4700:110:8a5c:1a2b:3c4d:5e6f:7a8b/128")
+    eq("account peer", account.peerKey, "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=")
+    eq("account endpoint ip", account.endpoint, "162.159.192.1:2408")
+    eq("account key kept", account.privateKey, privA)
+
+    // The 7.x reply shape (captured from the live API): the interface moved to config.interface and every endpoint
+    // port is 0 - the real port comes from the host field and the ports list.
+    val reply7 = """
+        {"id":"warp-id-2","config":{"client_id":"EXIP","peers":[{"public_key":"bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=","endpoint":{"v4":"162.159.192.7:0","v6":"[2606:4700:d0::a29f:c007]:0","host":"162.159.192.7:0","ports":[2408,500,1701,4500]}}],"interface":{"addresses":{"v4":"172.16.0.2","v6":"2606:4700:110:8142:cdc7:6b3c:fa61:d29c"}}}}
+    """.trimIndent()
+
+    val account7 = Warp.parseRegistration(reply7, privA)
+
+    eq("7.x id", account7.id, "warp-id-2")
+    eq("7.x v4", account7.addressV4, "172.16.0.2")
+    eq("7.x v6", account7.addressV6, "2606:4700:110:8142:cdc7:6b3c:fa61:d29c")
+    eq("7.x endpoint port from list", account7.endpoint, "162.159.192.7:2408")
+
+    // An endpoint with no usable port anywhere still falls back to the default WARP port.
+    val replyNoPort = """
+        {"id":"warp-id-3","config":{"peers":[{"public_key":"bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=","endpoint":{"v4":"162.159.192.9:0"}}],"interface":{"addresses":{"v4":"172.16.0.3"}}}}
+    """.trimIndent()
+
+    eq("endpoint default port", Warp.parseRegistration(replyNoPort, privA).endpoint, "162.159.192.9:2408")
+
+    throws("broken reply refused") { Warp.parseRegistration("""{"config":{}}""", privA) }
+
+    // register() walks the client-version list until one works and sends the public key.
+    val seenBodies = ArrayList<String>()
+    val seenVersions = ArrayList<String>()
+    val seenAgents = ArrayList<String>()
+    val transport = object : Warp.Transport {
+        override fun post(url: String, body: String, headers: Map<String, String>): Warp.Reply {
+            seenBodies += body
+            seenVersions += headers.getValue("CF-Client-Version")
+            seenAgents += headers.getValue("User-Agent")
+
+            return if (headers.getValue("CF-Client-Version") == Warp.CLIENT_VERSIONS.first()) {
+                Warp.Reply(403, """{"message":"blocked"}""")
+            } else {
+                Warp.Reply(200, reply)
+            }
+        }
+    }
+
+    val registered = Warp.register(transport, privA, pubA)
+
+    eq("register walked to version 2", seenVersions, listOf(Warp.CLIENT_VERSIONS[0], Warp.CLIENT_VERSIONS[1]))
+    check("register payload has the public key", seenBodies[0].contains("\"key\":\"$pubA\""))
+    // Without the 1.1.1.1 app's User-Agent Cloudflare bans the request with 403 "error code: 1010".
+    check("register sends the app user agent", seenAgents.all { it == Warp.USER_AGENT })
+    eq("register result", registered.id, "warp-id-1")
+
+    // The wireproxy config carries both proxies and the endpoint as an IP literal; bare addresses gain prefixes.
+    val conf = Warp.conf(account)
+
+    check("conf private key", conf.contains("PrivateKey = $privA"))
+    check("conf addresses", conf.contains("Address = 172.16.0.2/32, 2606:4700:110:8a5c:1a2b:3c4d:5e6f:7a8b/128"))
+    check("conf endpoint", conf.contains("Endpoint = 162.159.192.1:2408"))
+    check("conf socks port", conf.contains("BindAddress = 127.0.0.1:${Warp.SOCKS_PORT}"))
+    check("conf http port", conf.contains("BindAddress = 127.0.0.1:${Warp.HTTP_PORT}"))
+    check("conf allowedips", conf.contains("AllowedIPs = 0.0.0.0/0, ::/0"))
+    check("conf bare v6 gains /128", Warp.conf(account7).contains("2606:4700:110:8142:cdc7:6b3c:fa61:d29c/128"))
+
+    // The account file survives a round trip.
+    val dir = Files.createTempDirectory("warp").toFile()
+
+    try {
+        val file = File(dir, "account.json")
+
+        Warp.saveAccount(file, account)
+        eq("account round trip", Warp.loadAccount(file), account)
+        eq("missing account is null", Warp.loadAccount(File(dir, "nope.json")), null)
+    } finally {
+        dir.deleteRecursively()
+    }
+
+    // The server environment points at the local tunnel and never proxies loopback traffic.
+    val proxied = ProotCommand.guestEnv(cfg(proxy = Warp.PROXY_URL))
+
+    eq("proxy env http", proxied["HTTP_PROXY"], Warp.PROXY_URL)
+    eq("proxy env https", proxied["HTTPS_PROXY"], Warp.PROXY_URL)
+    check("proxy env no_proxy", proxied["NO_PROXY"]?.contains("127.0.0.1") == true)
+    check("proxy env lowercase", proxied["http_proxy"] == Warp.PROXY_URL)
+
+    // Node's built-in fetch only honours the proxy variables with this switch on.
+    eq("node env proxy switch", proxied["NODE_USE_ENV_PROXY"], "1")
+
+    // Cloudflare trace parsing: egress IP and whether WARP carried the request.
+    eq("trace parsed", Warp.parseTrace("fl=1\nip=104.28.1.2\nwarp=on\nloc=NL\n"), Warp.Trace("104.28.1.2", true))
+    eq("trace without warp", Warp.parseTrace("ip=1.2.3.4\nwarp=off\n"), Warp.Trace("1.2.3.4", false))
+    eq("trace without ip", Warp.parseTrace("warp=on\n"), null)
+    eq("trace warp=plus carries", Warp.parseTrace("ip=104.28.9.9\nwarp=plus\n"), Warp.Trace("104.28.9.9", true))
+
+    // Only a trace Cloudflare itself confirms as WARP-carried proves the tunnel; anything else is a plain request.
+    eq("confirmed WARP trace accepted", Warp.confirmedTrace(Warp.Trace("104.28.1.2", true)), Warp.Trace("104.28.1.2", true))
+    eq("unconfirmed WARP trace rejected", Warp.confirmedTrace(Warp.Trace("1.2.3.4", false)), null)
+    eq("missing trace rejected", Warp.confirmedTrace(null), null)
+
+    // A route that is required must provide a proxy before the server may start; an optional one may be direct.
+    check("required route fails closed without proxy", !Warp.proxySatisfiesRequirement(true, null))
+    check("required route fails closed on empty proxy", !Warp.proxySatisfiesRequirement(true, ""))
+    check("required route accepts a verified proxy", Warp.proxySatisfiesRequirement(true, Warp.PROXY_URL))
+    check("optional route permits direct mode", Warp.proxySatisfiesRequirement(false, null))
+
+    // Resolver failures cannot differ between client versions; everything else can (a new route, a new attempt).
+    check(
+        "dns failure recognized",
+        Warp.isDnsFailure("Unable to resolve host \"api.cloudflareclient.com\": No address associated with hostname") &&
+            Warp.isDnsFailure("unknownhost: api.cloudflareclient.com") &&
+            Warp.isDnsFailure("java.net.UnknownHostException: eai_again"),
+    )
+    check("timeout is not a dns failure", !Warp.isDnsFailure("Read timed out"))
+    check("http error is not a dns failure", !Warp.isDnsFailure("HTTP 403"))
+    check("null message is not a dns failure", !Warp.isDnsFailure(null))
+
+    // A transport error on one client version falls through to the next instead of escaping the loop.
+    val retryCalls = ArrayList<String>()
+    val retryTransport = object : Warp.Transport {
+        override fun post(url: String, body: String, headers: Map<String, String>): Warp.Reply {
+            retryCalls += headers.getValue("CF-Client-Version")
+
+            if (retryCalls.size == 1) throw java.io.IOException("Read timed out")
+
+            return Warp.Reply(200, reply)
+        }
+    }
+
+    val retried = Warp.register(retryTransport, privA, pubA)
+
+    eq("register survived a transport error", retried.id, "warp-id-1")
+    eq("register retried on the next client version", retryCalls, listOf(Warp.CLIENT_VERSIONS[0], Warp.CLIENT_VERSIONS[1]))
+
+    // A dead resolver fails at once: no point burning the remaining client versions on the same DNS.
+    val dnsCalls = ArrayList<String>()
+    val dnsTransport = object : Warp.Transport {
+        override fun post(url: String, body: String, headers: Map<String, String>): Warp.Reply {
+            dnsCalls += headers.getValue("CF-Client-Version")
+
+            throw java.io.IOException("Unable to resolve host \"api.cloudflareclient.com\": No address associated with hostname")
+        }
+    }
+
+    val dnsError = runCatching { Warp.register(dnsTransport, privA, pubA) }.exceptionOrNull()
+
+    check("register fails fast on dns", dnsError is Warp.RegistrationException)
+    eq("register did not retry dns", dnsCalls.size, 1)
+
+    // The orphan sweep: a leftover wireproxy of an earlier app run runs from a different (deleted) install path,
+    // so the match is on the file name, never on the full path - and never on this process itself.
+    val procEntries = listOf(
+        10 to "/data/app/~~x1/dev.opencode.mobile-A/lib/arm64/libwireproxy.so\u0000-c\u0000conf\u0000--silent",
+        11 to "/data/app/~~x0/dev.opencode.mobile-OLD/lib/arm64/libwireproxy.so\u0000-c\u0000conf",
+        12 to "/data/app/~~x1/dev.opencode.mobile-A/lib/arm64/libproot.so\u0000--kill-on-exit",
+        13 to "libwireproxy.so\u0000-c\u0000conf",
+        14 to "",
+    )
+
+    eq("sweep finds every wireproxy", Warp.wireproxyPids(procEntries.asSequence(), 1), listOf(10, 11, 13))
+    eq("sweep never kills itself", Warp.wireproxyPids(procEntries.asSequence(), 10), listOf(11, 13))
+    eq("sweep empty table", Warp.wireproxyPids(emptySequence<Pair<Int, String>>(), 1), emptyList<Int>())
+
+    // The quoted tail of a tunnel log: the last lines within the cap, blank lines dropped.
+    val longLog = (1..60).joinToString("\n") { "line $it" }
+
+    check("log tail keeps the newest lines", Warp.logTail(longLog, 40).lines().first().let { it.startsWith("line 5") })
+    check("log tail respects the cap", Warp.logTail(longLog, 40).length <= 40)
+    check("log tail keeps whole lines", Warp.logTail("a\nb\nc", 40) == "a\nb\nc")
+    eq("log tail empty log", Warp.logTail("", 40), "")
+    eq("log tail blank log", Warp.logTail(" \n\n", 40), "")
+
+    // A Go crash dump ends with register lines that would bury the reason printed above them.
+    val crash = "fatal error: unexpected signal\n" + (6..29).joinToString("\n") { "r$it      0x${it}f" } +
+        "\nlr      0xac0d0\nsp      0x72f15b54b0\npc      0x192c0\nfault   0x0"
+    val folded = Warp.logTail(crash)
+
+    check("crash dump keeps the reason", folded.startsWith("fatal error: unexpected signal"))
+    check("crash dump is folded", folded.lines().size == 2 && folded.contains("native crash (pc=0x192c0 lr=0xac0d0 fault=0x0)"))
+    check("few register-like lines stay", Warp.logTail("r1      0x1\npc      0x2", 480) == "r1      0x1\npc      0x2")
+
+    // Limit recognition on the event stream.
+    check("free limit event", Limits.carriesLimit("session.step.failed", "{\"error\":{\"type\":\"provider.free-limit\",\"message\":\"Free usage limit reached\"}}"))
+    check("rate limit event", Limits.carriesLimit("session.step.failed", "{\"error\":{\"type\":\"provider.rate-limit\",\"status\":429}}"))
+    check("retry status with rate limit", Limits.carriesLimit("session.status", "{\"status\":{\"type\":\"retry\",\"message\":\"Rate limit exceeded\"}}"))
+    check("unrelated event ignored", !Limits.carriesLimit("message.part.updated", "rate limit"))
+    check("plain failure ignored", !Limits.carriesLimit("session.step.failed", "{\"error\":{\"message\":\"file not found\"}}"))
+
+    val direct = ProotCommand.guestEnv(cfg())
+
+    check("no node proxy switch without warp", direct["NODE_USE_ENV_PROXY"] == null)
+
+    check("no proxy env without warp", direct.keys.none { it.equals("HTTP_PROXY", ignoreCase = true) })
+
+    // Segfault classification: proot's signal 11 line and lowercase variants, but not unrelated text.
+    check(
+        "segfault detected",
+        ProotCommand.segfaultIn("proot warning: signal 11 received from process -1") &&
+            ProotCommand.segfaultIn("Segmentation fault (core dumped)") &&
+            ProotCommand.segfaultIn("killed by SIGSEGV"),
+    )
+    check("no segfault in a clean log", !ProotCommand.segfaultIn("server listening on http://127.0.0.1:4099"))
+}
+
+// The egress history the floating menu shows: the current address first, then up to three previous ones,
+// each with its country and city labels. Garbage in the store must never crash the menu.
+
+fun testWarpHistory() {
+    val record = Warp.IpRecord("104.28.1.2", "Netherlands", "Amsterdam", 1_700_000_000_000)
+
+    // Round trip: the shape the manager writes is the shape it reads back.
+    val written = MiniJson.write(listOf(linkedMapOf<String, Any?>("ip" to record.ip, "country" to record.country, "city" to record.city, "ts" to record.ts)))
+    val parsed = Warp.parseHistory(written)
+
+    eq("history round trip", parsed, listOf(record))
+
+    // A rotation pushes the new address on top; the writer (rememberIp) caps at four, the reader stays honest.
+    val five = Warp.parseHistory(
+        """[{"ip":"1.1.1.1","country":"a","city":"b","ts":1},{"ip":"2.2.2.2","country":"c","city":"d","ts":2},{"ip":"3.3.3.3","ts":3},{"ip":"4.4.4.4","ts":4},{"ip":"5.5.5.5","ts":5}]""",
+    )
+
+    eq("history reads every entry newest first", five.map { it.ip }, listOf("1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4", "5.5.5.5"))
+    eq("the writer caps the history at four", Warp.parseHistory(Warp.writeHistory(five.take(4))).size, 4)
+    eq("history keeps unlabeled entries", Warp.parseHistory("""[{"ip":"9.9.9.9"}]"""), listOf(Warp.IpRecord("9.9.9.9", "", "", 0)))
+    eq("history of garbage is empty", Warp.parseHistory("not json at all"), emptyList())
+    eq("history of blank is empty", Warp.parseHistory(""), emptyList())
+    eq("history of null is empty", Warp.parseHistory(null), emptyList())
+    eq("history drops entries without an ip", Warp.parseHistory("""[{"country":"X"},{"ip":"7.7.7.7"}]""").size, 1)
 }

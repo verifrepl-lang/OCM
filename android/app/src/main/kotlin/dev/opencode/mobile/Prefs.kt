@@ -75,6 +75,19 @@ class Prefs(context: Context) {
         get() = sp.getString("vpn_selected_node", "") ?: ""
         set(value) = sp.edit().putString("vpn_selected_node", value).apply()
 
+    /** Route the local server's outbound traffic through the Cloudflare WARP tunnel (wireproxy). Off by default. */
+    var warpEnabled: Boolean
+        get() = sp.getBoolean("warp_enabled", false)
+        set(value) = sp.edit().putBoolean("warp_enabled", value).apply()
+
+    /**
+     * The WARP egress addresses this installation has used, newest first, as a JSON array of
+     * {ip, country, city, ts}: the current one plus up to three previous ones, for the menu.
+     */
+    var warpIpHistory: String
+        get() = sp.getString("warp_ip_history", "[]") ?: "[]"
+        set(value) = sp.edit().putString("warp_ip_history", value).apply()
+
     /** One-time prompts: true once [key] has been shown. */
     fun seen(key: String) = sp.getBoolean("seen_$key", false)
 

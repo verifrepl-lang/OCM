@@ -147,6 +147,15 @@ object Ui {
             .show()
     }
 
+    /** A plain informational dialog with one close button. */
+    fun message(activity: Activity, title: String, message: String) {
+        builder(activity)
+            .setTitle(title)
+            .setMessage(message)
+            .setPositiveButton(tr("Понятно", "Got it"), null)
+            .show()
+    }
+
     fun input(activity: Activity, title: String, hint: String, initial: String = "", password: Boolean = false, onOk: (String) -> Unit) {
         val field = EditText(activity).apply {
             setText(initial)
