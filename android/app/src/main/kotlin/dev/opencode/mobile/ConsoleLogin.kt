@@ -154,29 +154,27 @@ class ConsoleLogin(
 
     fun status(attempt: LoginAttempt): LoginStatus {
         // The two server lines expose the attempt status under different routes: the 1.x line at
-        // /api/integration/attempt/:id, the 2.x line at /api/integration/:id/connect/oauth/:id. Whichever exists
-        // answers; a 404 from both (or a server that calls the attempt gone) means the attempt expired.
-        val reply = transport.request("GET", "/api/integration/attempt/${attempt.id}")
+        // /api/integration/attempt/:id, the 2.x line at /api/integration/:id/connect/oauth/:id. A 404 - or a reply
+        // that carries no status object at all, which is what asking the wrong line through a catch-all UI route
+        // looks like - sends the poll to the other name; both coming up empty means the attempt is really gone.
+        var reply = transport.request("GET", "/api/integration/attempt/${attempt.id}")
 
-        val answer = if (reply.code == 404) {
+        if (reply.code == 404 || (reply.code in 200..299 && statusData(reply) == null)) {
             val legacy = transport.request("GET", "/api/integration/$integration/connect/oauth/${attempt.id}")
 
             if (legacy.code == 404) return LoginStatus.Expired
             if (legacy.code !in 200..299) throw LoginException(failure(legacy))
-
-            legacy
-        } else {
-            if (reply.code !in 200..299) {
-                // The 1.x handler reports an attempt that left its registry as a server error naming the id.
-                if (reply.code == 500 && reply.body.contains("not found", ignoreCase = true)) return LoginStatus.Expired
-
-                throw LoginException(failure(reply))
-            }
-
-            reply
+            if (statusData(legacy) != null) reply = legacy
         }
 
-        val data = MiniJson.obj(answer.body)?.get("data") as? Map<*, *> ?: throw LoginException("Unexpected status reply")
+        if (reply.code !in 200..299) {
+            // The 1.x handler reports an attempt that left its registry as a server error naming the id.
+            if (reply.code == 500 && reply.body.contains("not found", ignoreCase = true)) return LoginStatus.Expired
+
+            throw LoginException(failure(reply))
+        }
+
+        val data = statusData(reply) ?: throw LoginException("Unexpected status reply")
 
         return when (data["status"]) {
             "complete" -> LoginStatus.Complete
@@ -185,6 +183,8 @@ class ConsoleLogin(
             else -> LoginStatus.Pending
         }
     }
+
+    private fun statusData(reply: Reply): Map<*, *>? = MiniJson.obj(reply.body)?.get("data") as? Map<*, *>
 
     /** The accounts stored for this integration, newest connection last. Empty when nobody has signed in. */
     fun accounts(): List<ConsoleAccount> = info()?.let { accounts(it) }.orEmpty()
@@ -203,7 +203,10 @@ class ConsoleLogin(
 
             if (c["type"] != "credential") return@mapNotNull null
 
-            ConsoleAccount(c["id"] as? String ?: return@mapNotNull null, c["label"] as? String ?: "", c["method"] as? String ?: "")
+            // The 1.x registry does not say how the credential was made; on that line every stored credential came
+            // from a Console sign-in (this app connects keys through the environment instead), so a missing method
+            // reads as the console sign-in. The 2.x registry carries the method explicitly.
+            ConsoleAccount(c["id"] as? String ?: return@mapNotNull null, c["label"] as? String ?: "", c["method"] as? String ?: "oauth")
         }
     }
 

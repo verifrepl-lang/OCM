@@ -108,6 +108,9 @@ object ProotCommand {
         env["TERM"] = "xterm-256color"
         env["TZ"] = c.timeZone
         env["TMPDIR"] = "/tmp"
+        // Both password variables: the 1.x server reads OPENCODE_SERVER_PASSWORD, the 2.x one OPENCODE_PASSWORD.
+        // Username stays the shared default "opencode" on both lines.
+        env["OPENCODE_SERVER_PASSWORD"] = c.password
         env["OPENCODE_PASSWORD"] = c.password
         // The 1.x server line reads only OPENCODE_SERVER_PASSWORD; the 2.x line prefers OPENCODE_PASSWORD and
         // accepts either. Setting both keeps a profile working across either bundled or OTA-delivered build.

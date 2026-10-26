@@ -101,30 +101,36 @@ class ServerProcess(private val paths: Paths) {
         return started.exitValue() to output.toString()
     }
 
-    /** HTTP status of the server's info endpoint, or -1 when nothing answers. The 2.x line answers on /api/info, the
-     *  1.x line on /api/health; either accepting the credential counts as the server being up. */
-    fun health(baseUrl: String, password: String): Int = try {
+    /**
+     * HTTP status of the health endpoint, or -1 when nothing answers.
+     *
+     * Two endpoint names across the upstream lines: /api/health on 1.x, /api/info on 2.x. The 1.x server also serves
+     * a catch-all UI route that would answer 200 on any other path, so only these two names are asked and the first
+     * one that answers with a valid credential wins; a 404 moves on to the other name.
+     */
+    fun health(baseUrl: String, password: String): Int {
         val root = Urls.withoutTrailingSlash(baseUrl)
-        val auth = "Basic " + Urls.basicCredential(password)
 
-        val info = statusOf("$root/api/info", auth)
+        for (path in listOf("/api/health", "/api/info")) {
+            val code = try {
+                val connection = URL(root + path).openConnection() as HttpURLConnection
 
-        if (info == 404) statusOf("$root/api/health", auth) else info
-    } catch (_: Exception) {
-        -1
-    }
+                try {
+                    connection.connectTimeout = 1500
+                    connection.readTimeout = 4000
+                    connection.setRequestProperty("Authorization", "Basic " + Urls.basicCredential(password))
+                    connection.responseCode
+                } finally {
+                    connection.disconnect()
+                }
+            } catch (_: Exception) {
+                -1
+            }
 
-    private fun statusOf(url: String, auth: String): Int {
-        val connection = URL(url).openConnection() as HttpURLConnection
-
-        try {
-            connection.connectTimeout = 1500
-            connection.readTimeout = 4000
-            connection.setRequestProperty("Authorization", auth)
-            return connection.responseCode
-        } finally {
-            connection.disconnect()
+            if (code != 404) return code
         }
+
+        return -1
     }
 
     /** Waits until the server answers 200. Returns false when it dies, or the time runs out. */

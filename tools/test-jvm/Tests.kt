@@ -433,6 +433,10 @@ fun testLogin() {
     eq("accounts", login.accounts().map { it.id }, listOf("cred1", "cred2"))
     eq("signed in accounts", login.signedInAccounts().map { it.label }, listOf("me@gmail.com"))
 
+    // The 1.x registry does not carry the method at all: every credential connection reads as a console sign-in.
+    t.connections = """[{"type":"credential","id":"cred9","label":"me@gmail.com"}]"""
+    eq("method-less account is the console one", login.signedInAccounts().map { it.label }, listOf("me@gmail.com"))
+
     t.methods = """[{"id":"key","type":"key","label":"API key"}]"""
     throws("no oauth method") { login.start() }
     eq("code none", ConsoleLogin.code("https://x/y"), null)

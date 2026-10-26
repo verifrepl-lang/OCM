@@ -90,8 +90,8 @@ class LoginActivity : Activity() {
                     )
                 } else {
                     tr(
-                        "Без своего ключа бесплатные модели делят один лимит на всех пользователей OpenCode в мире, и он почти всегда исчерпан. Своя квота это: вход в консоль через браузер или ваш персональный API-ключ - тогда каждый запрос идёт под вашим личным ключом даже без входа в аккаунт.",
-                        "Without a key of your own the free models share one limit among all OpenCode users worldwide, and it is nearly always spent. A quota of your own is: a console sign-in via the browser, or your personal API key - then every request is sent under your personal key even without signing in.",
+                        "Регистрация этого устройства - персональный API-ключ. Вставьте свой ключ из консоли OpenCode, и каждый запрос пойдёт под ним без общего лимита на всех. Запасной способ - вход через браузер (Google или GitHub): та же личная квота. Без ключа и без входа бесплатные модели делят один лимит на всех.",
+                        "Registering this device means a personal API key. Paste your key from the OpenCode console and every request goes under it, with no shared limit involved. The other way is a browser sign-in (Google or GitHub): the same personal quota. With neither, the free models share one limit among everyone.",
                     )
                 },
 
@@ -208,27 +208,32 @@ class LoginActivity : Activity() {
         addSkip()
     }
 
-    /** The server is running: the sign-in button appears, and pressing it mints a fresh code. */
+    /** The server is running: registration is the key first; the browser sign-in is the other way to the same quota. */
     private fun showStartButtons() {
         buttons.removeAllViews()
 
-        buttons.addView(
-            Ui.button(
-                this,
-                if (adding) tr("Добавить аккаунт Google", "Add a Google account") else tr("Войти через Google", "Sign in with Google"),
-                palette,
-                primary = true,
-            ) {
-                val s = ServerState.snapshot
-
-                if (s.phase == Phase.RUNNING) begin(s, private = adding) else ServerService.send(this, ServerService.ACTION_START)
-            },
-            Ui.params(bottom = Ui.dp(this, 8)),
-        )
-
-        if (!adding) {
+        if (adding) {
             buttons.addView(
-                Ui.button(this, tr("У меня есть API-ключ", "I have an API key"), palette) { askForKey() },
+                Ui.button(this, tr("Добавить аккаунт Google", "Add a Google account"), palette, primary = true) {
+                    val s = ServerState.snapshot
+
+                    if (s.phase == Phase.RUNNING) begin(s, private = true) else ServerService.send(this, ServerService.ACTION_START)
+                },
+                Ui.params(bottom = Ui.dp(this, 8)),
+            )
+        } else {
+            // Registration is the key first: the primary action pastes the profile's own credential, no account needed.
+            buttons.addView(
+                Ui.button(this, tr("У меня есть API-ключ", "I have an API key"), palette, primary = true) { askForKey() },
+                Ui.params(bottom = Ui.dp(this, 8)),
+            )
+
+            buttons.addView(
+                Ui.button(this, tr("Войти через браузер (Google или GitHub)", "Sign in via the browser (Google or GitHub)"), palette) {
+                    val s = ServerState.snapshot
+
+                    if (s.phase == Phase.RUNNING) begin(s, private = false) else ServerService.send(this, ServerService.ACTION_START)
+                },
                 Ui.params(bottom = Ui.dp(this, 8)),
             )
 
