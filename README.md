@@ -9,8 +9,8 @@
 <p align="center">Настоящий OpenCode на Android-телефоне. Без root и без отдельного компьютера.</p>
 <p align="center">
   <a href="https://t.me/OpenCodeMob"><img alt="Telegram" src="https://img.shields.io/badge/Telegram-%40OpenCodeMob-26A5E4?style=flat-square&logo=telegram&logoColor=white" /></a>
-  <a href="https://github.com/maxfuckkz/opencode-mobile/releases"><img alt="Releases" src="https://img.shields.io/github/v/release/maxfuckkz/opencode-mobile?style=flat-square" /></a>
-  <a href="https://github.com/maxfuckkz/opencode-mobile/actions/workflows/build-apk.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/maxfuckkz/opencode-mobile/build-apk.yml?style=flat-square&branch=main" /></a>
+  <a href="https://github.com/verifrepl-lang/OCM/releases"><img alt="Releases" src="https://img.shields.io/github/v/release/verifrepl-lang/OCM?style=flat-square" /></a>
+  <a href="https://github.com/verifrepl-lang/OCM/actions/workflows/build-apk.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/verifrepl-lang/OCM/build-apk.yml?style=flat-square&branch=main" /></a>
 </p>
 
 ---
@@ -19,7 +19,7 @@
 
 | Платформа | Скачать |
 | --- | --- |
-| Android 8.0+ (arm64) | [`opencode-android-*.apk`](https://github.com/maxfuckkz/opencode-mobile/releases) — из последнего релиза |
+| Android 8.0+ (arm64) | [`opencode-android-*.apk`](https://github.com/verifrepl-lang/OCM/releases) — из последнего релиза |
 
 APK собирает и публикует в **Releases** workflow **Build APK** полностью автоматически: при каждом пуше в `main`, при теге `v*` и при ручном запуске (вкладка Actions → **Run workflow**). Workflow сам собирает свежий сервер OpenCode на arm64, упаковывает его вместе с Linux-окружением, подписывает и выкладывает релиз `ota-app-…` с файлом `opencode-android-….apk`. Туда же попадают `manifest.json` и `manifest.json.sig` — по ним уже установленные копии приложения обновляются без переустановки.
 
