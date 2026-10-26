@@ -165,9 +165,12 @@ class WebHost(private val activity: MainActivity) {
                 http.disconnect()
             }
         } catch (e: Exception) {
-            // Without a cookie the page still loads; the web view then answers the server's password prompt itself.
-            Log.w("web", "pairing failed (${e.message}); falling back to the password prompt")
-            "$root/"
+            // No pairing endpoint (the 1.x servers have none): the interface takes the credential from an
+            // auth_token query parameter instead - the same base64 "user:password" the basic challenge wants - and
+            // strips it from the address once it is in. The web view also answers the basic challenge itself, so a
+            // page that ignores the parameter still gets in.
+            Log.w("web", "pairing unavailable (${e.message}); loading with an auth token")
+            "$root/?auth_token=" + Urls.basicCredential(password)
         }
     }
 

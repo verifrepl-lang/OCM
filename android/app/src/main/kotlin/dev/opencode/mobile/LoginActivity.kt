@@ -45,8 +45,8 @@ class LoginActivity : Activity() {
             Ui.text(
                 this,
                 tr(
-                    "Без аккаунта бесплатные модели делят один лимит на всех пользователей OpenCode, и он почти всегда исчерпан. Два способа получить личную квоту: войти в консоль (откроется браузер) или вставить свой API-ключ — тогда каждый запрос идёт под вашим персональным ключом даже без входа в аккаунт. Можно пропустить.",
-                    "Without an account the free models share one limit among all OpenCode users, and it is nearly always spent. Two ways to get a quota of your own: sign in to the console (your browser opens), or paste your own API key - then every request is sent under your personal key even without signing in. You can skip this.",
+                    "Регистрация этого устройства — персональный API-ключ. Вставьте свой ключ из консоли OpenCode: каждый запрос пойдёт под ним, и никакой общий лимит на всех пользователей вас не касается. Вход через аккаунт (Google или GitHub) остаётся запасным способом — той же личной квоты. Ключ не обязателен, но без него бесплатные модели делят один лимит на всех.",
+                    "Registering this device means a personal API key. Paste your key from the OpenCode console: every request goes under it, and the one limit shared by all users never touches you. Signing in with an account (Google or GitHub) stays as the other way to the same personal quota. A key is optional, but without one the free models share one limit among everyone.",
                 ),
                 14f,
                 palette.muted,
@@ -61,7 +61,7 @@ class LoginActivity : Activity() {
         codeBox.addView(Ui.text(this, tr("Если страница спросит код, он совпадает с этим.", "If the page asks for a code, it is this one."), 12f, palette.muted))
         column.addView(codeBox, Ui.params(bottom = Ui.dp(this, 16)))
 
-        status = Ui.text(this, tr("Выберите способ подключения личной квоты.", "Pick how to connect your personal quota."), 14f, palette.text)
+        status = Ui.text(this, tr("Регистрация устройства: вставьте ключ или войдите в аккаунт.", "Device registration: paste a key or sign in to an account."), 14f, palette.text)
         column.addView(status, Ui.params(bottom = Ui.dp(this, 16)))
 
         buttons = Ui.vertical(this)
@@ -234,23 +234,24 @@ class LoginActivity : Activity() {
                 Ui.button(this, tr("Другой аккаунт", "Another account"), palette) { Browser.open(this, current.url, private = true) },
                 Ui.params(bottom = Ui.dp(this, 8)),
             )
-        } else {
-            buttons.addView(
-                Ui.button(this, tr("Войти через браузер", "Sign in via the browser"), palette, primary = true) {
-                    val s = ServerState.snapshot
-
-                    if (s.phase == Phase.RUNNING) begin(s) else ServerService.send(this, ServerService.ACTION_RESTART)
-                },
-                Ui.params(bottom = Ui.dp(this, 8)),
-            )
         }
 
-        val hasKey = app.profiles.active.zenApiKey != null
-
+        // Registration is the key first: the primary action pastes the profile's own credential, no account needed.
         buttons.addView(
-            Ui.button(this, tr("У меня есть API-ключ", "I have an API key"), palette) { askForKey() },
+            Ui.button(this, tr("У меня есть API-ключ", "I have an API key"), palette, primary = true) { askForKey() },
             Ui.params(bottom = Ui.dp(this, 8)),
         )
+
+        buttons.addView(
+            Ui.button(this, tr("Войти через браузер (Google или GitHub)", "Sign in via the browser (Google or GitHub)"), palette) {
+                val s = ServerState.snapshot
+
+                if (s.phase == Phase.RUNNING) begin(s) else ServerService.send(this, ServerService.ACTION_RESTART)
+            },
+            Ui.params(bottom = Ui.dp(this, 8)),
+        )
+
+        val hasKey = app.profiles.active.zenApiKey != null
 
         if (hasKey) {
             buttons.addView(

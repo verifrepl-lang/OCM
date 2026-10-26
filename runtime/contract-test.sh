@@ -38,56 +38,66 @@ auth="opencode:$password"
 check "version flag" bash -c "'$bin' --version | grep -qF '$want'"
 
 # The same variables the app sets (see ProotCommand.guestEnv), with a scratch HOME and no XDG overrides, so the data
-# location is the one the app backs up before an update.
+# location is the one the app backs up before an update. The 1.x server reads OPENCODE_SERVER_PASSWORD, the 2.x one
+# OPENCODE_PASSWORD; both are set so the test covers whichever line is being built.
 env -i PATH="$PATH" HOME="$work/home" LANG=C.UTF-8 TMPDIR="$work" \
-  OPENCODE_PASSWORD="$password" OPENCODE_CLIENT=android OPENCODE_DISABLE_AUTOUPDATE=1 \
+  OPENCODE_SERVER_PASSWORD="$password" OPENCODE_PASSWORD="$password" OPENCODE_CLIENT=android OPENCODE_DISABLE_AUTOUPDATE=1 \
   OPENCODE_CONFIG_CONTENT="{\"instructions\":[\"$work/guest/AGENTS.md\"]}" \
   "$bin" serve --hostname 127.0.0.1 --port "$port" >"$work/server.log" 2>&1 &
 pid=$!
 
+# The health endpoint the app can use: /api/health on the 1.x line, /api/info on the 2.x one. A catch-all UI route
+# may answer 200 on any other path, so only these two names are trusted.
+health_status() {
+  local path="$1" without="$2"
+  if [ -n "$without" ]; then
+    curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$base$path"
+  else
+    curl -s -o /dev/null -w '%{http_code}' --max-time 5 -u "$auth" "$base$path"
+  fi
+}
+
 up=0
+health_path=""
 for _ in $(seq 1 120); do
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 -u "$auth" "$base/api/info" || true)"
-  [ "$code" = "200" ] && { up=1; break; }
+  for p in /api/health /api/info; do
+    code="$(health_status "$p")"
+    [ "$code" = "200" ] && { up=1; health_path="$p"; break; }
+  done
+  [ "$up" = 1 ] && break
   kill -0 "$pid" 2>/dev/null || break
   sleep 1
 done
 
 if [ "$up" != 1 ]; then
-  fail "server answers on /api/info"
+  fail "server answers on /api/health or /api/info"
   echo "---- server log ----"
   tail -n 60 "$work/server.log"
   exit 1
 fi
 
-pass "server answers on /api/info"
+pass "server answers on $health_path"
 
-curl -s --max-time 5 -u "$auth" "$base/api/info" >"$work/info.json"
 quiet() { "$@" >/dev/null; }
 
-check "info reports the version" quiet jq -e --arg v "$want" '.version | contains($v)' "$work/info.json"
-check "info has urls and paths" quiet jq -e '(.urls | type == "array") and (.paths.tmp | type == "string")' "$work/info.json"
+# The 2.x info endpoint reports the version and paths; the 1.x health endpoint just says healthy.
+if [ "$health_path" = "/api/info" ]; then
+  curl -s --max-time 5 -u "$auth" "$base/api/info" >"$work/info.json"
+  check "info reports the version" quiet jq -e --arg v "$want" '.version | contains($v)' "$work/info.json"
+  check "info has urls and paths" quiet jq -e '(.urls | type == "array") and (.paths.tmp | type == "string")' "$work/info.json"
+else
+  curl -s --max-time 5 -u "$auth" "$base/api/health" >"$work/health.json"
+  check "health says healthy" quiet jq -e '.healthy == true' "$work/health.json"
+fi
 
 status() { curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$@"; }
 
-check "no credentials is refused" test "$(status "$base/api/info")" = 401
-check "wrong password is refused" test "$(status -u 'opencode:nope' "$base/api/info")" = 401
+check "no credentials is refused" test "$(status "$base$health_path")" = 401
+check "wrong password is refused" test "$(status -u 'opencode:nope' "$base$health_path")" = 401
 
-# Pairing: how the app signs its web view in.
-curl -s --max-time 5 -X POST -u "$auth" "$base/api/pair" >"$work/pair.json"
-code="$(jq -r '.code // empty' "$work/pair.json")"
-check "pairing code is issued" test -n "$code"
-
-curl -s -D "$work/connect.headers" -o /dev/null --max-time 5 -H 'Accept: text/html' "$base/auth/connect/$code"
-check "pairing link redirects" bash -c "head -1 '$work/connect.headers' | grep -q ' 302'"
-cookie="$(tr -d '\r' <"$work/connect.headers" | grep -i '^set-cookie:' | head -1 | sed 's/^[Ss]et-[Cc]ookie: *//; s/;.*//')"
-check "cookie is named for the port" test "${cookie%%=*}" = "opencode_session_$port"
-check "cookie is HttpOnly" grep -qi '^set-cookie:.*httponly' "$work/connect.headers"
-check "the cookie authenticates" test "$(status -H "Cookie: $cookie" "$base/api/info")" = 200
-check "a pairing code works once" test "$(status -H 'Accept: text/html' "$base/auth/connect/$code")" = 401
-
-# The web interface is served from inside the executable.
-curl -s -D "$work/page.headers" -o "$work/page.html" --max-time 10 -H "Cookie: $cookie" -H 'Accept: text/html' "$base/"
+# The web view is signed in with basic auth: the page loads with the password the web view answers the server's
+# challenge with, and the 1.x interface also takes it from an auth_token query parameter. No pairing round-trip.
+curl -s -D "$work/page.headers" -o "$work/page.html" --max-time 10 -u "$auth" -H 'Accept: text/html' "$base/"
 check "web interface is served" bash -c "head -1 '$work/page.headers' | grep -q ' 200' && grep -qi '^content-type: *text/html' '$work/page.headers'"
 check "web interface looks like a page" grep -qi '<html' "$work/page.html"
 

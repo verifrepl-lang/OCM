@@ -381,12 +381,19 @@ class FakeTransport : Transport {
                 }
             method == "POST" && path == "/api/integration/opencode/connect/oauth" ->
                 Reply(200, """{"location":{},"data":{"attemptID":"con_1","url":"https://opencode.ai/auth/device?user_code=ABCD-EFGH&x=1","instructions":"Enter code: ABCD-EFGH","mode":"auto","time":{"created":1,"expires":99}}}""")
-            method == "GET" && path == "/api/integration/opencode/connect/oauth/con_1" ->
+            // The 1.x name answers when legacyPolling is off (the default); the 2.x name answers instead when it is
+            // on, and the 1.x name is a 404 then - the app must fall back to it.
+            method == "GET" && path == "/api/integration/attempt/con_1" && !legacyPolling ->
+                Reply(200, if (status == "failed") """{"data":{"status":"failed","message":"access_denied","time":{"created":1,"expires":2}}}""" else """{"data":{"status":"$status","time":{"created":1,"expires":2}}}""")
+            method == "GET" && path == "/api/integration/opencode/connect/oauth/con_1" && legacyPolling ->
                 Reply(200, if (status == "failed") """{"data":{"status":"failed","message":"access_denied","time":{"created":1,"expires":2}}}""" else """{"data":{"status":"$status","time":{"created":1,"expires":2}}}""")
             path.endsWith("/gone") -> Reply(404, "{}")
             else -> Reply(500, """{"message":"boom"}""")
         }
     }
+
+    /** A 2.x-style server: the attempt id only answers under the integration. */
+    var legacyPolling = false
 }
 
 fun testLogin() {
@@ -409,9 +416,22 @@ fun testLogin() {
     eq("status failed", login.status(attempt), LoginStatus.Failed("access_denied"))
     eq("status 404 is expired", login.status(attempt.copy(id = "gone")), LoginStatus.Expired)
 
+    // A 2.x-style server keeps the attempt under the integration and 404s the plain attempt id: the poll falls back
+    // to the old name and still reads the statuses.
+    t.legacyPolling = true
+    t.status = "pending"
+    eq("legacy pending", login.status(attempt), LoginStatus.Pending)
+    t.status = "complete"
+    eq("legacy complete", login.status(attempt), LoginStatus.Complete)
+    t.legacyPolling = false
+
     t.connections = """[{"type":"credential","id":"cred1","label":"me@gmail.com","method":"oauth"},{"type":"credential","id":"cred2","label":"key","method":"key"},{"type":"env","name":"X"}]"""
     eq("accounts", login.accounts().map { it.id }, listOf("cred1", "cred2"))
     eq("signed in accounts", login.signedInAccounts().map { it.label }, listOf("me@gmail.com"))
+
+    // The 1.x registry does not carry the method at all: every credential connection reads as a console sign-in.
+    t.connections = """[{"type":"credential","id":"cred9","label":"me@gmail.com"}]"""
+    eq("method-less account is the console one", login.signedInAccounts().map { it.label }, listOf("me@gmail.com"))
 
     t.methods = """[{"id":"key","type":"key","label":"API key"}]"""
     throws("no oauth method") { login.start() }

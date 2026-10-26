@@ -96,20 +96,36 @@ class ServerProcess(private val paths: Paths) {
         return started.exitValue() to output.toString()
     }
 
-    /** HTTP status of `GET /api/info`, or -1 when nothing answers. */
-    fun health(baseUrl: String, password: String): Int = try {
-        val connection = URL(Urls.withoutTrailingSlash(baseUrl) + "/api/info").openConnection() as HttpURLConnection
+    /**
+     * HTTP status of the health endpoint, or -1 when nothing answers.
+     *
+     * Two endpoint names across the upstream lines: /api/health on 1.x, /api/info on 2.x. The 1.x server also serves
+     * a catch-all UI route that would answer 200 on any other path, so only these two names are asked and the first
+     * one that answers with a valid credential wins; a 404 moves on to the other name.
+     */
+    fun health(baseUrl: String, password: String): Int {
+        val root = Urls.withoutTrailingSlash(baseUrl)
 
-        try {
-            connection.connectTimeout = 1500
-            connection.readTimeout = 4000
-            connection.setRequestProperty("Authorization", "Basic " + Urls.basicCredential(password))
-            connection.responseCode
-        } finally {
-            connection.disconnect()
+        for (path in listOf("/api/health", "/api/info")) {
+            val code = try {
+                val connection = URL(root + path).openConnection() as HttpURLConnection
+
+                try {
+                    connection.connectTimeout = 1500
+                    connection.readTimeout = 4000
+                    connection.setRequestProperty("Authorization", "Basic " + Urls.basicCredential(password))
+                    connection.responseCode
+                } finally {
+                    connection.disconnect()
+                }
+            } catch (_: Exception) {
+                -1
+            }
+
+            if (code != 404) return code
         }
-    } catch (_: Exception) {
-        -1
+
+        return -1
     }
 
     /** Waits until the server answers 200. Returns false when it dies, or the time runs out. */

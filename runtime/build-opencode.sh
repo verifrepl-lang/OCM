@@ -45,13 +45,14 @@ echo "Building $repo $version ($commit)"
 cd "$src"
 
 # Patches this project carries on top of the upstream tag, one per feature/fix.
-# runtime/patches/v2 applies to the 2.x line this app builds. The directory is empty on purpose right now: the
-# bundled server is a byte-for-byte copy of upstream's own client - the Zen identity included, because the gateway
-# meters the free (anonymous) capacity in one world-shared bucket that no client-side change can influence, and an
-# altered client identity only breaks the parity "the original answers, ours must too" depends on. Each patch is
-# applied once: a re-run on a dirty checkout recognises its own work and skips; a patch that no longer fits the
+# runtime/patches/v1 (the 1.x line this app builds) and runtime/patches/v2 (the 2.x line) are empty on purpose right
+# now: the bundled server is a byte-for-byte copy of upstream's own client - the Zen identity included, because the
+# gateway meters the free (anonymous) capacity in one world-shared bucket that no client-side change can influence,
+# and an altered client identity only breaks the parity "the original answers, ours must too" depends on. Each patch
+# is applied once: a re-run on a dirty checkout recognises its own work and skips; a patch that no longer fits the
 # upstream tag fails the build loudly instead of shipping silently unpatched.
-patch_dir="$here/patches/v2"
+major="${version%%.*}"
+patch_dir="$here/patches/v$major"
 if [ -d "$patch_dir" ]; then
   for patch in "$patch_dir"/*.patch; do
     [ -e "$patch" ] || continue
@@ -73,10 +74,18 @@ bun install --frozen-lockfile
 export OPENCODE_CHANNEL=latest
 export OPENCODE_VERSION="$version"
 
-bun packages/cli/script/build-node.ts --app-archive-only --app-archive=.cache/app-archive.bin --skip-install
-bun packages/cli/script/build-node.ts --target=linux-arm64 --skip-install --outdir=dist/node --app-archive=.cache/app-archive.bin
+# The 1.x line builds with Bun's own compiler (the web UI is embedded by the build itself); the 2.x line used a Node
+# single-executable built by packages/cli/script/build-node.ts with a prebuilt web-UI archive.
+if [ "$major" = "1" ]; then
+  bun packages/opencode/script/build.ts --single --skip-install
 
-built="$src/packages/cli/dist/node/cli-node-linux-arm64/bin/opencode2-node"
+  built="$src/packages/opencode/dist/opencode-linux-arm64/bin/opencode"
+else
+  bun packages/cli/script/build-node.ts --app-archive-only --app-archive=.cache/app-archive.bin --skip-install
+  bun packages/cli/script/build-node.ts --target=linux-arm64 --skip-install --outdir=dist/node --app-archive=.cache/app-archive.bin
+
+  built="$src/packages/cli/dist/node/cli-node-linux-arm64/bin/opencode2-node"
+fi
 
 [ -f "$built" ] || { echo "Upstream did not produce $built" >&2; exit 1; }
 

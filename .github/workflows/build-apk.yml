@@ -197,7 +197,7 @@ jobs:
       - name: Version
         id: ver
         run: |
-          if [ "${GITHUB_REF_TYPE}" = tag ]; then name="${GITHUB_REF_NAME#v}"; else name="1.0.6"; fi
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then name="${GITHUB_REF_NAME#v}"; else name="1.0.7"; fi
           # Minutes since the epoch: always increases, and stays far below the 2^31 limit of a version code.
           code=$(( $(date +%s) / 60 ))
           echo "name=$name" >> "$GITHUB_OUTPUT"

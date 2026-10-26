@@ -151,13 +151,22 @@ class ConsoleLogin(
     }
 
     fun status(attempt: LoginAttempt): LoginStatus {
-        val reply = transport.request("GET", "/api/integration/$integration/connect/oauth/${attempt.id}")
+        // The 1.x servers poll the attempt by its id; the 2.x ones nested it under the integration. The names exist
+        // on their own line only, and a wrong-line request can come back as 404 or as some non-API page, so the
+        // fallback also fires when the reply holds no status object. Both names 404 = the attempt is really gone.
+        var reply = transport.request("GET", "/api/integration/attempt/${attempt.id}")
+
+        if (reply.code == 404 || statusData(reply) == null) {
+            val alt = transport.request("GET", "/api/integration/$integration/connect/oauth/${attempt.id}")
+
+            if (alt.code in 200..299 && statusData(alt) != null) reply = alt
+        }
 
         if (reply.code == 404) return LoginStatus.Expired
 
         if (reply.code !in 200..299) throw LoginException(failure(reply))
 
-        val data = MiniJson.obj(reply.body)?.get("data") as? Map<*, *> ?: throw LoginException("Unexpected status reply")
+        val data = statusData(reply) ?: throw LoginException("Unexpected status reply")
 
         return when (data["status"]) {
             "complete" -> LoginStatus.Complete
@@ -166,6 +175,8 @@ class ConsoleLogin(
             else -> LoginStatus.Pending
         }
     }
+
+    private fun statusData(reply: Reply): Map<*, *>? = MiniJson.obj(reply.body)?.get("data") as? Map<*, *>
 
     /** The accounts stored for this integration, newest connection last. Empty when nobody has signed in. */
     fun accounts(): List<ConsoleAccount> = info()?.let { accounts(it) }.orEmpty()
@@ -184,7 +195,10 @@ class ConsoleLogin(
 
             if (c["type"] != "credential") return@mapNotNull null
 
-            ConsoleAccount(c["id"] as? String ?: return@mapNotNull null, c["label"] as? String ?: "", c["method"] as? String ?: "")
+            // The 1.x registry does not say how the credential was made; on that line every stored credential came
+            // from a Console sign-in (this app connects keys through the environment instead), so a missing method
+            // reads as the console sign-in. The 2.x registry carries the method explicitly.
+            ConsoleAccount(c["id"] as? String ?: return@mapNotNull null, c["label"] as? String ?: "", c["method"] as? String ?: "oauth")
         }
     }
 
