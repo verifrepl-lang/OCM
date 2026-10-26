@@ -49,7 +49,7 @@ pid=$!
 # The health endpoint the app can use: /api/health on the 1.x line, /api/info on the 2.x one. A catch-all UI route
 # may answer 200 on any other path, so only these two names are trusted.
 health_status() {
-  local path="$1" without="$2"
+  local path="$1" without="${2:-}"
   if [ -n "$without" ]; then
     curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$base$path"
   else
