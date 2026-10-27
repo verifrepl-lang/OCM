@@ -15,9 +15,14 @@ O.esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>'
 O.basename=p=>String(p||'').replace(/\/+$/,'').split('/').pop();
 O.dirname=p=>{p=String(p||'').replace(/\/+$/,'');const i=p.lastIndexOf('/');return i<0?'.':i===0?'/':p.slice(0,i)};
 O.ext=p=>{const b=O.basename(p).toLowerCase();const i=b.lastIndexOf('.');return i>0?b.slice(i+1):(i===0?b.slice(1):'')};
-O.ago=ts=>{if(!ts)return'';const s=Math.max(0,(Date.now()-ts)/1000);if(s<60)return'now';if(s<3600)return Math.floor(s/60)+'m';if(s<86400)return Math.floor(s/3600)+'h';if(s<604800)return Math.floor(s/86400)+'d';return new Date(ts).toLocaleDateString()};
+O.ago=ts=>{if(!ts)return'';const s=Math.max(0,(Date.now()-ts)/1000);if(s<60)return'сейчас';if(s<3600)return Math.floor(s/60)+' мин';if(s<86400)return Math.floor(s/3600)+' ч';if(s<604800)return Math.floor(s/86400)+' д';return new Date(ts).toLocaleDateString()};
 O.fmtK=n=>n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(n>=1e4?0:1)+'k':String(n||0);
-O.stripAnsi=s=>String(s||'').replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g,'');
+O.stripAnsi=s=>String(s||'')
+  .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g,'')
+  .replace(/\x1b[P^_][^\x1b]*(?:\x1b\\)?/g,'')
+  .replace(/\x1b\[[0-9;?<=>!"' ]*[ -\/]*[@-~]/g,'')
+  .replace(/\x1b[@-Z\\-_]/g,'')
+  .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g,'');
 O.debounce=(f,ms)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>f(...a),ms)}};
 O.store={get(k,d){try{const v=localStorage.getItem('ocm.'+k);return v==null?d:JSON.parse(v)}catch{return d}},set(k,v){try{localStorage.setItem('ocm.'+k,JSON.stringify(v))}catch{}}};
 let last=0,ctr=0;
@@ -52,12 +57,12 @@ O.sheet=(title,body,opts)=>{opts=opts||{};
 O.confirm=(title,msg,ok,danger)=>new Promise(res=>{let done=false;
   const fin=v=>{if(done)return;done=true;s.close();res(v)};
   const s=O.sheet(title,h('div',null,h('p',{class:'mut'},msg||''),h('div',{style:{display:'flex',gap:'8px',marginTop:'12px'}},
-    h('button',{class:'btn grow',onclick:()=>fin(false)},'Cancel'),h('button',{class:'btn grow '+(danger?'dng':'pri'),onclick:()=>fin(true)},ok||'OK'))),{onClose:()=>{if(!done){done=true;res(false)}}})});
+    h('button',{class:'btn grow',onclick:()=>fin(false)},'Отмена'),h('button',{class:'btn grow '+(danger?'dng':'pri'),onclick:()=>fin(true)},ok||'ОК'))),{onClose:()=>{if(!done){done=true;res(false)}}})});
 O.ask=(title,label,val,multiline)=>new Promise(res=>{let done=false;
   const inp=multiline?h('textarea',{rows:6,class:'mono'}):h('input',{type:'text'});inp.value=val||'';
   const fin=v=>{if(done)return;done=true;s.close();res(v)};
   const s=O.sheet(title,h('div',null,h('div',{class:'field'},label?h('label',null,label):null,inp),h('div',{style:{display:'flex',gap:'8px'}},
-    h('button',{class:'btn grow',onclick:()=>fin(null)},'Cancel'),h('button',{class:'btn pri grow',onclick:()=>fin(inp.value)},'OK'))),{onClose:()=>{if(!done){done=true;res(null)}}});
+    h('button',{class:'btn grow',onclick:()=>fin(null)},'Отмена'),h('button',{class:'btn pri grow',onclick:()=>fin(inp.value)},'ОК'))),{onClose:()=>{if(!done){done=true;res(null)}}});
   setTimeout(()=>inp.focus(),200)});
 O.actions=(title,items)=>{const s=O.sheet(title,h('div',null,items.filter(Boolean).map(it=>h('button',{class:'li',onclick:()=>{s.close();it.fn()}},
   O.icon(it.icon||'dots'),h('div',{class:'t'},h('b',{class:it.danger?'err':''},it.label),it.sub?h('span',null,it.sub):null)))));return s};

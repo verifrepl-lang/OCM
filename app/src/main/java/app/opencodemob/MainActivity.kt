@@ -170,7 +170,7 @@ class MainActivity : ComponentActivity() {
 
     private fun doSignIn() {
         if (BuildConfig.GOOGLE_WEB_CLIENT_ID.isEmpty()) {
-            Prefs.put(this, "uid", "local"); Prefs.put(this, "email", "local profile"); Prefs.put(this, "name", "Local")
+            Prefs.put(this, "uid", "local"); Prefs.put(this, "email", "локальный профиль"); Prefs.put(this, "name", "Гость")
             emit("signin", JSONObject().put("ok", true).put("fallback", true)); return
         }
         val opt = GetGoogleIdOption.Builder()
@@ -243,6 +243,20 @@ class MainActivity : ComponentActivity() {
 
         // --- account / lifecycle ---
         @JavascriptInterface fun signIn() { runOnUiThread { doSignIn() } }
+
+        /** Вход по email без Google: uid = SHA-256(email), как и для Google-аккаунтов. У каждого email — свой изолированный профиль. */
+        @JavascriptInterface fun signInEmail(email: String) {
+            val e = email.trim().lowercase()
+            if (!Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$").matches(e)) {
+                emit("signin", JSONObject().put("ok", false).put("error", "Некорректный email")); return
+            }
+            val uid = MessageDigest.getInstance("SHA-256").digest(e.toByteArray())
+                .joinToString("") { "%02x".format(it) }.take(24)
+            Prefs.put(this@MainActivity, "uid", uid)
+            Prefs.put(this@MainActivity, "email", e)
+            Prefs.put(this@MainActivity, "name", e.substringBefore('@'))
+            emit("signin", JSONObject().put("ok", true))
+        }
 
         @JavascriptInterface fun signOut() {
             runOnUiThread {

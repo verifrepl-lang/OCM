@@ -4,8 +4,9 @@ let logEl,xwrap,xhost,keys,term,fit,pty=null,wsid=null,ctrl=false,sub='agent',su
 const logEls=new Map();
 O.termInit=root=>{
   logEl=h('div',{id:'agentlog',class:'sel'});
-  const inp=h('input',{class:'mono',placeholder:'run a command (visible to the agent)',autocapitalize:'off',autocorrect:'off',spellcheck:'false',onkeydown:e=>{if(e.key==='Enter')run()}});
-  const run=async()=>{const c=inp.value.trim();if(!c)return;if(!S.model){O.toast('Connect a provider first');return}inp.value='';
+  const inp=h('input',{class:'mono',placeholder:'команда (видна агенту)',autocapitalize:'off',autocorrect:'off',spellcheck:'false',onkeydown:e=>{if(e.key==='Enter')run()}});
+  const run=async()=>{const c=inp.value.trim();if(!c)return;if(!S.model){O.toast('Сначала подключите провайдера');return}inp.value='';
+    if(/^opencode(\s+tui)?\s*$/i.test(c)){O.toast('Приложение уже является интерфейсом OpenCode. Интерактивный TUI запускайте во вкладке «Shell», для работы с агентом — вкладка «Чат»',6000);return}
     try{const sid=await O.chat.sess();api('POST','/session/'+sid+'/shell',{agent:S.agent,model:S.model,command:c},{timeout:3600000}).catch(e=>O.toast(e.message))}catch(e){O.toast(e.message)}};
   aPane=h('div',{style:{display:'flex',flexDirection:'column',flex:1,minHeight:0}},logEl,h('div',{class:'cmdline'},inp,h('button',{class:'btn pri',onclick:run},O.icon('play'))));
   xhost=h('div',{id:'xterm'});xwrap=h('div',{id:'xwrap'},xhost);
@@ -17,7 +18,7 @@ O.termInit=root=>{
     mk('|',send('|')),mk('/',send('/')),mk('-',send('-')),mk('~',send('~')),mk('$',send('$')),mk('^C',send('\x03')),mk('^D',send('\x04')),
     h('button',{onclick:()=>{const t=OC.pasteText();if(t&&wsid)OC.wsSend(wsid,t)}},O.icon('copy')));
   sPane=h('div',{style:{display:'none',flexDirection:'column',flex:1,minHeight:0}},xwrap,keys);
-  const tabs=h('div',{class:'tsub'},subBtns.agent=h('button',{class:'on',onclick:()=>setSub('agent')},'Agent'),subBtns.shell=h('button',{onclick:()=>setSub('shell')},'Shell'),h('span',{class:'grow'}),
+  const tabs=h('div',{class:'tsub'},subBtns.agent=h('button',{class:'on',onclick:()=>setSub('agent')},'Агент'),subBtns.shell=h('button',{onclick:()=>setSub('shell')},'Shell'),h('span',{class:'grow'}),
     h('button',{class:'ibtn s',onclick:restart},O.icon('refresh')));
   root.append(tabs,aPane,sPane);
   bus.on('open',rebuildLog);bus.on('part',(sid,m,p)=>{if(sid===S.sid&&p&&p.type==='tool'&&p.tool==='bash')upsertEntry(p)});
@@ -33,7 +34,7 @@ function upsertEntry(p,quiet){const st=p.state||{},i=st.input||{},md=st.metadata
   let e=logEls.get(p.id);const near=logEl.scrollHeight-logEl.scrollTop-logEl.clientHeight<80;
   if(!e){e={cmd:h('div',{class:'cmd'}),out:h('div',{class:'out'}),meta:h('div',{class:'meta'})};logEls.set(p.id,e);logEl.append(e.cmd,e.out,e.meta)}
   e.cmd.textContent='$ '+(i.command||'');if(e.out._t!==out){e.out._t=out;e.out.textContent=out.length>20000?out.slice(-20000):out}
-  e.meta.textContent=st.status==='running'?'running...':(md.exit!=null?'exit '+md.exit:'')+(st.status==='error'?' failed':'');
+  e.meta.textContent=st.status==='running'?'выполняется...':(md.exit!=null?'код '+md.exit:'')+(st.status==='error'?' ошибка':'');
   if(near&&!quiet)logEl.scrollTop=logEl.scrollHeight}
 function theme(){const c=getComputedStyle(document.documentElement),g=n=>c.getPropertyValue(n).trim();return{background:g('--code'),foreground:g('--fg'),cursor:g('--acc'),selectionBackground:g('--bg3')}}
 function doFit(){if(!fit||!term||!xhost.offsetParent)return;try{fit.fit()}catch{}
@@ -46,12 +47,12 @@ async function startPty(){
   doFit();if(pty&&wsid)return;
   try{if(!pty)pty=await api('POST','/pty',{cwd:S.dir,title:'shell'});
     wsid='w'+Date.now().toString(36);OC.wsOpen(wsid,'/pty/'+pty.id+'/connect?directory='+encodeURIComponent(S.dir))}
-  catch(e){term.write('\r\n\x1b[31mTerminal is unavailable: '+(e.message||'error')+'\x1b[0m\r\nUse the Agent tab to run commands.\r\n')}}
+  catch(e){term.write('\r\n\x1b[31mТерминал недоступен: '+(e.message||'ошибка')+'\x1b[0m\r\nИспользуйте вкладку «Агент», чтобы запускать команды.\r\n')}}
 function onWs(d){if(d.id!==wsid)return;
   if(d.t==='open'){setTimeout(doFit,50)}
   else if(d.t==='msg')term.write(d.d);
   else if(d.t==='bin'){const bin=atob(d.d),u=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);term.write(u)}
-  else if(d.t==='close'||d.t==='err'){term.write('\r\n\x1b[33m[session closed - tap refresh to start a new shell]\x1b[0m\r\n');wsid=null}}
+  else if(d.t==='close'||d.t==='err'){term.write('\r\n\x1b[33m[сессия закрыта — нажмите ⟳, чтобы запустить новый shell]\x1b[0m\r\n');wsid=null}}
 async function restart(){if(sub==='agent'){rebuildLog();return}
   if(wsid){OC.wsClose(wsid);wsid=null}if(pty){api('DELETE','/pty/'+pty.id).catch(()=>{});pty=null}if(term)term.reset();startPty()}
 bus.on('dir',()=>{if(wsid){OC.wsClose(wsid);wsid=null}pty=null;if(term)term.reset()});

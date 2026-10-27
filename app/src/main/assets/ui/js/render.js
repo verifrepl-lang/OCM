@@ -5,7 +5,7 @@ O.md=t=>{try{return DOMPurify.sanitize(marked.parse(t||'',{gfm:true}),{USE_PROFI
 O.enhance=el=>{el.querySelectorAll('pre').forEach(pre=>{if(pre.dataset.e||pre.closest('.codeblock'))return;pre.dataset.e='1';
   const code=pre.querySelector('code');const lang=((code&&code.className.match(/language-([\w+#-]+)/))||[])[1]||'';
   if(code&&window.hljs){try{hljs.highlightElement(code)}catch{}}
-  const wrap=h('div',{class:'codeblock'},h('div',{class:'code-bar'},h('span',null,lang||'text'),h('button',{class:'ibtn s','data-copy':'1'},O.icon('copy'))));
+  const wrap=h('div',{class:'codeblock'},h('div',{class:'code-bar'},h('span',null,lang||'текст'),h('button',{class:'ibtn s','data-copy':'1'},O.icon('copy'))));
   pre.replaceWith(wrap);wrap.append(pre)})};
 O.mdInto=(el,t)=>{el.innerHTML=O.md(t);O.enhance(el)};
 
@@ -22,9 +22,9 @@ O.diffOps=(a,b)=>{const A=a.split('\n'),B=b.split('\n');let s=0;while(s<A.length
   for(let i=ea;i<A.length;i++)ops.push([' ',A[i]]);return ops};
 O.diffEl=(ops,ctx)=>{ctx=ctx==null?3:ctx;const box=h('div',{class:'diff'});const keep=new Array(ops.length).fill(false);
   ops.forEach((o,i)=>{if(o[0]!==' ')for(let k=Math.max(0,i-ctx);k<=Math.min(ops.length-1,i+ctx);k++)keep[k]=true});
-  let skipped=0;const flush=()=>{if(skipped){box.append(h('div',{class:'c'},'  ... '+skipped+' unchanged lines'));skipped=0}};
+  let skipped=0;const flush=()=>{if(skipped){box.append(h('div',{class:'c'},'  … без изменений: '+skipped+' строк'));skipped=0}};
   ops.forEach((o,i)=>{if(!keep[i]){skipped++;return}flush();box.append(h('div',{class:o[0]==='+'?'a':o[0]==='-'?'d':''},o[0]+' '+o[1]))});flush();
-  if(!box.childNodes.length)box.append(h('div',{class:'c'},'No changes'));return box};
+  if(!box.childNodes.length)box.append(h('div',{class:'c'},'Нет изменений'));return box};
 O.unifiedEl=txt=>{const box=h('div',{class:'diff'});String(txt||'').split('\n').slice(0,2500).forEach(l=>{
   const c=l.startsWith('+')&&!l.startsWith('+++')?'a':l.startsWith('-')&&!l.startsWith('---')?'d':l.startsWith('@@')?'h':(l.startsWith('---')||l.startsWith('+++')||l.startsWith('Index')||l.startsWith('==='))?'c':'';
   box.append(h('div',{class:c},l))});return box};
@@ -53,5 +53,5 @@ O.codeLines=(text,lang)=>{let html;try{html=lang&&hljs.getLanguage(lang)?hljs.hi
 O.codeView=(text,path)=>{const lines=text.split('\n');const big=lines.length>4000;const use=big?lines.slice(0,4000).join('\n'):text;
   const hl=O.codeLines(use,big?null:O.langOf(path));const box=h('div',{class:'code-view'});
   const fr=document.createDocumentFragment();hl.forEach((l,i)=>{const row=h('div',{class:'ln'},h('i',null,i+1),h('span',{html:l||' '}));fr.append(row)});box.append(fr);
-  if(big)box.append(h('div',{class:'mut s',style:{padding:'8px 12px'}},'Showing first 4000 lines'));return box};
+  if(big)box.append(h('div',{class:'mut s',style:{padding:'8px 12px'}},'Показаны первые 4000 строк'));return box};
 })();

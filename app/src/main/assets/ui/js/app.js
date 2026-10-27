@@ -13,11 +13,11 @@ function build(){if(built)return;built=true;const app=O.$('#app');
   T.banner=h('div',{id:'banner',class:'hide'});
   P.files=h('div',{id:'pane-files',class:'pane'});P.chat=h('div',{id:'pane-chat',class:'pane'});P.side=h('div',{id:'pane-side',class:'pane'});
   SP.term=h('div',{class:'side-pane'});SP.changes=h('div',{class:'side-pane'});
-  SB.term=h('button',{onclick:()=>O.setTab('term')},'Terminal');SB.changes=h('button',{onclick:()=>O.setTab('changes')},'Changes');
+  SB.term=h('button',{onclick:()=>O.setTab('term')},'Терминал');SB.changes=h('button',{onclick:()=>O.setTab('changes')},'Изменения');
   P.side.append(h('div',{id:'side-tabs'},SB.term,SB.changes),SP.term,SP.changes);
   const main=h('div',{id:'main'},P.files,P.chat,P.side);
   const tb=(k,ic,l)=>{TB[k]=h('button',{onclick:()=>O.setTab(k)},O.icon(ic),h('span',null,l));return TB[k]};
-  const bar=h('div',{id:'tabbar'},tb('chat','chat','Chat'),tb('files','folder','Files'),tb('term','terminal','Terminal'),tb('changes','branch','Changes'));
+  const bar=h('div',{id:'tabbar'},tb('chat','chat','Чат'),tb('files','folder','Файлы'),tb('term','terminal','Терминал'),tb('changes','branch','Изменения'));
   app.append(top,T.banner,main,bar);
   O.filesInit(P.files);O.chatInit(P.chat);O.termInit(SP.term);O.changesInit(SP.changes);
   addEventListener('resize',O.debounce(layout,100));
@@ -35,12 +35,12 @@ O.setTab=t=>{tab=t;if(t==='term'||t==='changes')sideTab=t;
   if(wide()&&(t==='term'||t==='changes')){}
   layout();if(t==='files')O.refreshFiles(false);if(t==='changes')O.refreshChanges()};
 function updateTop(){if(!built)return;const s=S.sessions.find(x=>x.id===S.sid)||O.child(S.sid);
-  T.t.textContent=s?O.sessionTitle(s):'New session';const u=S.sid&&O.contextUsage(S.sid);
-  T.s.textContent=[O.basename(S.dir)||'/',S.branch,u?O.fmtK(u.tot)+' tokens'+(u.pct!=null?' ('+u.pct+'%)':''):''].filter(Boolean).join('  /  ');
+  T.t.textContent=s?O.sessionTitle(s):'Новая сессия';const u=S.sid&&O.contextUsage(S.sid);
+  T.s.textContent=[O.basename(S.dir)||'/',S.branch,u?O.fmtK(u.tot)+' ток'+(u.pct!=null?' ('+u.pct+'%)':''):''].filter(Boolean).join('  /  ');
   O.updateBadges()}
 O.updateBadges=()=>{if(!built)return;const set=(k,n)=>{let b=TB[k].querySelector('.badge');if(!n){if(b)b.remove();return}if(!b){b=h('span',{class:'badge'});TB[k].append(b)}b.textContent=n};
   set('chat',S.perms.length+S.questions.length);set('changes',O.changesCount())};
-function updateBanner(){if(!built)return;const t=S.offline?'Offline - showing cached chats':(!S.up?'Connecting to the local server...':'');
+function updateBanner(){if(!built)return;const t=S.offline?'Офлайн — показаны кэшированные чаты':(!S.up?'Подключение к локальному серверу...':'');
   T.banner.textContent=t;T.banner.classList.toggle('hide',!t)}
 async function refreshStatus(){try{const m=await api('GET','/mcp');S.mcp=m;const v=Object.values(m);
   T.dot.className='dot '+(v.some(x=>x.status==='failed'||x.status==='needs_auth')?'warn':v.some(x=>x.status==='connected')?'ok':'')}catch{}}

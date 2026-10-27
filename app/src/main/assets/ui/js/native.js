@@ -26,7 +26,7 @@ O.native={
   readText:p=>j(OC.readText(p))||{ok:false},
   writeText:(p,t)=>j(OC.writeText(p,t))||{ok:false},
   cfgRead:()=>OC.cfgRead(),cfgWrite:t=>j(OC.cfgWrite(t))||{ok:false},
-  copy:t=>{try{OC.copy(t);O.toast('Copied',1200)}catch{}},share:t=>OC.share(t),open:u=>OC.openLink(u),
+  copy:t=>{try{OC.copy(t);O.toast('Скопировано',1200)}catch{}},share:t=>OC.share(t),open:u=>OC.openLink(u),
   state:()=>j(OC.state())||{}
 };
 O.openUrl=u=>{if(/^https?:\/\//i.test(u))OC.openLink(u)};

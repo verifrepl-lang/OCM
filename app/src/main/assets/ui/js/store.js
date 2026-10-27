@@ -57,7 +57,7 @@ O.onServerEvent=raw=>{let o;try{o=JSON.parse(raw)}catch{return}
   case'vcs.branch.updated':S.branch=p.branch||'';bus.emit('vcs');break;
   case'mcp.tools.changed':case'lsp.updated':bus.emit('statuspanel');break;
   case'pty.exited':case'pty.deleted':bus.emit('pty',p);break}};
-const normPerm=p=>({id:p.id,sessionID:p.sessionID,title:p.title||p.permission||p.type||'Permission',patterns:[].concat(p.patterns||p.pattern||[]),metadata:p.metadata||{},tool:p.tool,raw:p});
+const normPerm=p=>({id:p.id,sessionID:p.sessionID,title:p.title||p.permission||p.type||'Разрешение',patterns:[].concat(p.patterns||p.pattern||[]),metadata:p.metadata||{},tool:p.tool,raw:p});
 
 O.on('sse',d=>{if(d.t==='data')O.onServerEvent(d.d);else if(d.t==='open'){S.up=true;bus.emit('conn')}else if(d.t==='close'){S.up=false;bus.emit('conn')}});
 
@@ -121,12 +121,12 @@ O.setDir=async(dir)=>{
   await Promise.all([O.loadMeta(),O.loadSessions()]);
   const last=O.store.get('sid.'+dir);const pick=S.sessions.find(x=>x.id===last)||S.sessions[0];
   await O.openSession(pick?pick.id:null);bus.emit('files')};
-O.sessionTitle=s=>s?(s.title&&!/^(New session|Child session) - /.test(s.title)?s.title:'New session'):'OpenCode';
+O.sessionTitle=s=>s?(s.title&&!/^(New session|Child session|Новая сессия) - /.test(s.title)?s.title:'Новая сессия'):'OpenCode';
 O.contextUsage=sid=>{const l=O.visibleMsgs(sid);for(let i=l.length-1;i>=0;i--){const x=l[i].info;if(x.role==='assistant'&&x.tokens&&(x.tokens.input||x.tokens.output)){
   const t=x.tokens,tot=(t.input||0)+(t.output||0)+(t.reasoning||0)+((t.cache&&t.cache.read)||0)+((t.cache&&t.cache.write)||0);
   const mi=O.modelInfo(x.providerID,x.modelID),lim=mi&&mi.limit&&mi.limit.context;return{tot,pct:lim?Math.round(tot*100/lim):null}}}return null};
 O.replyPermission=async(p,r)=>{
   const tries=[()=>api('POST','/permission/'+p.id+'/reply',{reply:r}),()=>api('POST','/session/'+p.sessionID+'/permissions/'+p.id,{response:r}),()=>api('POST','/api/session/'+p.sessionID+'/permission/'+p.id+'/reply',{reply:r})];
   for(const t of tries){try{await t();S.perms=S.perms.filter(x=>x.id!==p.id);bus.emit('perm');return}catch(e){if(e.status!==404&&e.status!==405&&e.status!==400)throw e}}
-  throw new Error('Permission reply is not supported by this server version')};
+  throw new Error('Ответ на разрешение не поддерживается этой версией сервера')};
 })();

@@ -30,7 +30,7 @@ class OpenCodeService : Service() {
         if (intent?.action == "stop") { stopSelf(); return START_NOT_STICKY }
         Notifier.ensureChannels(this)
         ServiceCompat.startForeground(
-            this, 1, Notifier.runtime(this, "Starting"),
+            this, 1, Notifier.runtime(this, "Запуск"),
             if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0
         )
         val uid = intent?.getStringExtra("uid") ?: Prefs.get(this, "uid")
@@ -59,7 +59,7 @@ class OpenCodeService : Service() {
             if (Runtime.waitReady(port, pw, 45_000)) {
                 ServerState.port = port; ServerState.password = pw
                 ServerState.error = null; ServerState.ready = true
-                Notifier.updateRuntime(this, "Running")
+                Notifier.updateRuntime(this, "Работает")
                 startWatcher(port, pw)
                 p.waitFor()
                 ServerState.ready = false
@@ -98,12 +98,12 @@ class OpenCodeService : Service() {
         when {
             type == "session.idle" -> {
                 val now = SystemClock.elapsedRealtime()
-                if (now - lastIdle > 3000) { lastIdle = now; Notifier.event(this, Notifier.DONE, "Task finished", "OpenCode has completed the work.") }
+                if (now - lastIdle > 3000) { lastIdle = now; Notifier.event(this, Notifier.DONE, "Задача завершена", "OpenCode завершил работу.") }
             }
             type == "question.asked" || (type.startsWith("permission.") && (type.endsWith("updated") || type.endsWith("asked"))) ->
-                Notifier.event(this, Notifier.ACTION, "Action required", "OpenCode is waiting for your answer or approval.")
+                Notifier.event(this, Notifier.ACTION, "Требуется действие", "OpenCode ждёт вашего ответа или подтверждения.")
             type == "session.error" && quotaRe.containsMatchIn(o.toString()) ->
-                Notifier.event(this, Notifier.QUOTA, "Quota reached", "The selected model refused the request: limit or quota exceeded.")
+                Notifier.event(this, Notifier.QUOTA, "Квота исчерпана", "Лимит модели исчерпан. Подключите свой ключ: Настройки → Модели → Подключить провайдера.")
         }
     }
 

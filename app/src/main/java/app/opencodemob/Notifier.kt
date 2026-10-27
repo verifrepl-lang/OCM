@@ -18,8 +18,8 @@ object Notifier {
 
     fun ensureChannels(c: Context) {
         val nm = c.getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel("runtime", "Background service", NotificationManager.IMPORTANCE_LOW))
-        listOf(DONE to "Task finished", ACTION to "Action required", QUOTA to "Quota reached").forEach { (id, name) ->
+        nm.createNotificationChannel(NotificationChannel("runtime", "Фоновая служба", NotificationManager.IMPORTANCE_LOW))
+        listOf(DONE to "Задача завершена", ACTION to "Требуется действие", QUOTA to "Квота исчерпана").forEach { (id, name) ->
             // Sound is played by Notifier.beep so each event has its own pattern and one on/off switch
             nm.createNotificationChannel(NotificationChannel(id, name, NotificationManager.IMPORTANCE_HIGH).apply { setSound(null, null) })
         }
