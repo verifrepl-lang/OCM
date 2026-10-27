@@ -18,7 +18,7 @@ android {
         versionCode = appVersionCode
         versionName = appVersionName
         ndk { abiFilters.add("arm64-v8a") }
-        buildConfigField("String", "GITHUB_REPO", "\"samartsevmaksim5-ops/OpenCode-Mobile\"")
+        buildConfigField("String", "GITHUB_REPO", "\"verifrepl-lang/OCM\"")
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"${System.getenv("GOOGLE_WEB_CLIENT_ID") ?: ""}\"")
     }
 

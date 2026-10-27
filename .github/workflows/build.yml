@@ -31,7 +31,17 @@ jobs:
         with:
           node-version: "20"
 
-      - uses: android-actions/setup-android@v3
+      # setup-android@v3 is broken: it runs `sdkmanager tools` and Google removed
+      # the legacy 'tools' package from the SDK repository ("Failed to find package 'tools'").
+      # The ubuntu-24.04 runner already ships the SDK; we only accept licenses
+      # and install the exact components this project needs.
+      - name: Android SDK (licenses + components)
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$SDKM" ] || SDKM="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | head -n1)"
+          echo "sdkmanager: $SDKM"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" --install "platforms;android-35" "build-tools;35.0.0" "platform-tools" > /dev/null
 
       - uses: gradle/actions/setup-gradle@v4
         with:
