@@ -405,6 +405,23 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        /** Nuclear retry: wipes every leftover of previous installs (old rootfs, partial extracts,
+         *  renamed-aside dirs), then installs from scratch. Fixes any stale state on the phone. */
+        @JavascriptInterface fun resetInstall() {
+            thread {
+                try {
+                    stopService(Intent(this@MainActivity, OpenCodeService::class.java))
+                    Runtime.rmrf(Runtime.rootfs(this@MainActivity))
+                    Runtime.rmrf(File(filesDir, "rootfs.new"))
+                    filesDir.listFiles { f -> f.name.startsWith("rootfs.broken") }?.forEach { Runtime.rmrf(it) }
+                    Runtime.install(this@MainActivity) { emit("install", JSONObject().put("pct", it)) }
+                    emit("install", JSONObject().put("done", true))
+                } catch (e: Throwable) {
+                    emit("install", JSONObject().put("error", e.message ?: e.toString()))
+                }
+            }
+        }
+
         @JavascriptInterface fun start() {
             runOnUiThread {
                 val uid = uid()

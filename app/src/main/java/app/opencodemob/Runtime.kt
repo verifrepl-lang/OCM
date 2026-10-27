@@ -21,6 +21,7 @@ import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.SecureRandom
+import kotlin.concurrent.thread
 
 object Prefs {
     private fun sp(c: Context) = c.getSharedPreferences("oc", Context.MODE_PRIVATE)
@@ -88,6 +89,25 @@ object Runtime {
         return stamp.exists() && stamp.readText().trim() == assetId(c)
     }
 
+    /** Human-readable error for install failures (disk full, permissions, tar entry). */
+    private fun friendly(e: Exception, prefix: String): String {
+        val m = e.message ?: e.toString()
+        return when {
+            m.contains("ENOSPC") || m.contains("No space left", true) ->
+                "На телефоне закончилось свободное место. Освободите минимум 2 ГБ и нажмите «Повторить»."
+            m.contains("EACCES") || m.contains("Permission denied", true) ->
+                "$prefix: нет доступа к файлам. Нажмите «Сбросить и установить заново»."
+            else -> "$prefix: $m"
+        }
+    }
+
+    /** Deletes rootfs.broken-* dirs left aside by previous installs (best effort, background). */
+    fun cleanupBroken(c: Context) {
+        c.filesDir.listFiles { f -> f.name.startsWith("rootfs.broken") }?.forEach {
+            thread(isDaemon = true) { try { rmrf(it) } catch (_: Exception) {} }
+        }
+    }
+
     private fun assetId(c: Context): String =
         c.assets.open("rootfs.id").bufferedReader().use { it.readText().trim() }
 
@@ -102,6 +122,7 @@ object Runtime {
     fun install(c: Context, progress: (Int) -> Unit) {
         val id = assetId(c)
         val tmp = File(c.filesDir, "rootfs.new")
+        cleanupBroken(c)
         rmrf(tmp); tmp.mkdirs()
         val total = c.assets.openFd("rootfs.tar.xz").use { it.length }.coerceAtLeast(1)
         val cnt = Counting(c.assets.open("rootfs.tar.xz"))
@@ -109,19 +130,31 @@ object Runtime {
         TarArchiveInputStream(XZCompressorInputStream(BufferedInputStream(cnt, 1 shl 16))).use { tar ->
             var e = tar.nextEntry
             while (e != null) {
-                extract(tmp, tar, e as TarArchiveEntry)
+                try { extract(tmp, tar, e as TarArchiveEntry) }
+                catch (ex: Exception) { throw IOException(friendly(ex, "Не удалось распаковать элемент «${e.name}»")) }
                 val pct = (cnt.n * 100 / total).toInt().coerceIn(0, 99)
                 if (pct != last) { last = pct; progress(pct) }
                 e = tar.nextEntry
             }
         }
-        File(tmp, "etc/resolv.conf").apply { quietDelete(this); writeText("nameserver 1.1.1.1\nnameserver 8.8.8.8\n") }
-        File(tmp, "etc/hosts").apply { quietDelete(this); writeText("127.0.0.1 localhost\n::1 localhost\n") }
-        File(tmp, "tmp").apply { mkdirs(); Os.chmod(path, 0x3FF) } // 1777
-        File(tmp, "root").mkdirs()
-        File(tmp, ".stamp").writeText(id)
-        rmrf(rootfs(c))
-        if (!tmp.renameTo(rootfs(c))) throw IOException("cannot move rootfs into place")
+        try {
+            File(tmp, "etc/resolv.conf").apply { quietDelete(this); writeText("nameserver 1.1.1.1\nnameserver 8.8.8.8\n") }
+            File(tmp, "etc/hosts").apply { quietDelete(this); writeText("127.0.0.1 localhost\n::1 localhost\n") }
+            File(tmp, "tmp").apply { mkdirs(); Os.chmod(path, 0x3FF) } // 1777
+            File(tmp, "root").mkdirs()
+            File(tmp, ".stamp").writeText(id)
+        } catch (ex: Exception) { throw IOException(friendly(ex, "Не удалось подготовить окружение")) }
+        // Replace the old rootfs. Its leftover files (from any previous version) can be
+        // undeletable (read-only/locked), so: best-effort delete -> rename aside -> swap in.
+        val old = rootfs(c)
+        try { rmrf(old) } catch (_: Exception) {}
+        if (old.exists()) {
+            val aside = File(c.filesDir, "rootfs.broken-" + System.currentTimeMillis())
+            if (!old.renameTo(aside))
+                throw IOException("Не удалось заменить старое Linux-окружение. Нажмите «Сбросить и установить заново», а если не поможет — очистите данные OpenCode в настройках Android.")
+            thread(isDaemon = true) { try { rmrf(aside) } catch (_: Exception) {} }
+        }
+        if (!tmp.renameTo(rootfs(c))) throw IOException("Не удалось переместить Linux-окружение")
         progress(100)
     }
 
@@ -152,11 +185,29 @@ object Runtime {
         val p = f.toPath()
         if (!Files.exists(p, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return
         Files.walkFileTree(p, object : SimpleFileVisitor<Path>() {
-            override fun visitFile(file: Path, a: BasicFileAttributes): FileVisitResult {
-                Files.delete(file); return FileVisitResult.CONTINUE
+            private fun writable(x: Path) {
+                if (Files.isSymbolicLink(x)) return // deleting a symlink needs no perms on the target
+                try {
+                    Files.setPosixFilePermissions(x, java.nio.file.attribute.PosixFilePermissions.fromString("rwxrwxrwx"))
+                } catch (_: Exception) {}
+            }
+            override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+                writable(dir); return FileVisitResult.CONTINUE
+            }
+            override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                try {
+                    try { Files.delete(file) }
+                    catch (_: Exception) { writable(file); Files.delete(file) }
+                } catch (_: Exception) { /* keep going; install() renames the dir aside */ }
+                return FileVisitResult.CONTINUE
+            }
+            override fun visitFileFailed(file: Path, e: IOException): FileVisitResult {
+                try { file.toFile().delete() } catch (_: Exception) {}
+                return FileVisitResult.CONTINUE
             }
             override fun postVisitDirectory(dir: Path, e: IOException?): FileVisitResult {
-                Files.delete(dir); return FileVisitResult.CONTINUE
+                try { Files.delete(dir) } catch (_: Exception) {}
+                return FileVisitResult.CONTINUE
             }
         })
     }
