@@ -65,7 +65,7 @@ object ZenClient {
      */
     fun canonicalSessionId(signal: String): String {
         val md = MessageDigest.getInstance("SHA-256")
-        val h = md.digest(("ses\x00" + signal).toByteArray())
+        val h = md.digest(("ses\u0000" + signal).toByteArray())
         val window = 30L * 24 * 3600 * 1000
         var seed: Long = 0
         for (i in 0 until 4) seed = (seed shl 8) or (h[i].toLong() and 0xFF)
