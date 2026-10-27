@@ -36,16 +36,19 @@ PY
 }
 fetch_deb proot
 fetch_deb libtalloc
+fetch_deb libandroid-shmem   # proot's --sysvipc support links against it
 TP=data/data/com.termux/files/usr
 cp "$WORK/x/proot/$TP/bin/proot" "$LIBS/libproot.so"
 cp "$WORK/x/proot/$TP/libexec/proot/loader" "$LIBS/libproot-loader.so"
 cp -L "$WORK/x/libtalloc/$TP/lib/libtalloc.so.2" "$LIBS/libtalloc.so"
+cp -L "$WORK/x/libandroid-shmem/$TP/lib/libandroid-shmem.so" "$LIBS/libandroid-shmem.so"
 patchelf --remove-rpath "$LIBS/libproot.so" || true
 patchelf --replace-needed libtalloc.so.2 libtalloc.so "$LIBS/libproot.so"
 patchelf --set-soname libtalloc.so "$LIBS/libtalloc.so"
+patchelf --remove-rpath "$LIBS/libandroid-shmem.so" || true
 for n in $(patchelf --print-needed "$LIBS/libproot.so"); do
   case "$n" in
-    libc.so|libdl.so|libm.so|liblog.so|libtalloc.so) ;;
+    libc.so|libdl.so|libm.so|liblog.so|libtalloc.so|libandroid-shmem.so) ;;
     *) echo "proot has an unexpected dependency: $n (needs bundling)"; exit 1 ;;
   esac
 done
