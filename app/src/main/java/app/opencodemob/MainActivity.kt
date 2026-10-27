@@ -169,7 +169,7 @@ class MainActivity : ComponentActivity() {
             var failMsg: String? = null
             val tail = java.util.ArrayDeque<String>()
             try {
-                val p = Runtime.prootCmd(this, listOf("/usr/local/bin/opencode", "console", "login"))
+                val p = Runtime.prootCmd(this, u, listOf("/usr/local/bin/opencode", "console", "login"))
                 loginProc = p
                 java.io.BufferedReader(java.io.InputStreamReader(p.inputStream, Charsets.UTF_8)).use { r ->
                     while (true) {
@@ -227,7 +227,7 @@ class MainActivity : ComponentActivity() {
         if (u.isEmpty() || !Runtime.isInstalled(this)) return emit("authlogout", JSONObject().put("ok", false).put("error", "Окружение не готово"))
         thread {
             try {
-                val p = Runtime.prootCmd(this, listOf("/usr/local/bin/opencode", "console", "logout", email))
+                val p = Runtime.prootCmd(this, u, listOf("/usr/local/bin/opencode", "console", "logout", email))
                 val out = StringBuilder()
                 java.io.BufferedReader(java.io.InputStreamReader(p.inputStream, Charsets.UTF_8)).use { r ->
                     while (true) {
