@@ -94,7 +94,11 @@ class MainActivity : ComponentActivity() {
                 override fun shouldInterceptRequest(v: WebView, r: WebResourceRequest): WebResourceResponse? =
                     loader.shouldInterceptRequest(r.url)
                 override fun shouldOverrideUrlLoading(v: WebView, r: WebResourceRequest): Boolean {
-                    openExternal(r.url); return true
+                    val u = r.url
+                    // our own asset domain must never "escape" to the system browser:
+                    // e.g. location.reload() after sign-out goes through here
+                    if (u.host == "appassets.androidplatform.net") { v.loadUrl(u.toString()); return true }
+                    openExternal(u); return true
                 }
             }
             webChromeClient = object : WebChromeClient() {
@@ -148,6 +152,14 @@ class MainActivity : ComponentActivity() {
 
     private fun uid() = Prefs.get(this, "uid")
 
+    /** Local data dir key. Never empty after this call, so opencode login always works. */
+    private fun ensureUid(): String {
+        val u = uid()
+        if (u.isNotEmpty()) return u
+        Prefs.put(this, "uid", "local")
+        return "local"
+    }
+
     // ---------- opencode account login (device flow via `opencode console login`) ----------
 
     private val ansiRe = Regex("\u001B\\[[0-9;?]*[ -/]*[@-~]|\u001B\\][^\u0007\u001B]*(\u0007|\u001B\\\\)|[\u001B\u0000-\u0008\u000B\u000C\u000E-\u001F]")
@@ -158,8 +170,7 @@ class MainActivity : ComponentActivity() {
     /** Starts `opencode console login` inside proot and streams the device-flow URL/code to the UI. */
     private fun doAuthLogin() {
         if (loginProc != null) return authEmit(JSONObject().put("stage", "error").put("error", "Вход уже выполняется"))
-        val u = uid()
-        if (u.isEmpty()) return authEmit(JSONObject().put("stage", "error").put("error", "Сначала войдите в профиль"))
+        val u = ensureUid()
         if (!Runtime.isInstalled(this)) return authEmit(JSONObject().put("stage", "error").put("error", "Linux-окружение ещё не установлено"))
         thread {
             var url: String? = null
@@ -223,8 +234,8 @@ class MainActivity : ComponentActivity() {
 
     /** Runs `opencode console logout <email>` (quick, non-interactive with an explicit email). */
     private fun doAuthLogout(email: String) {
-        val u = uid()
-        if (u.isEmpty() || !Runtime.isInstalled(this)) return emit("authlogout", JSONObject().put("ok", false).put("error", "Окружение не готово"))
+        val u = ensureUid()
+        if (!Runtime.isInstalled(this)) return emit("authlogout", JSONObject().put("ok", false).put("error", "Окружение не готово"))
         thread {
             try {
                 val p = Runtime.prootCmd(this, u, listOf("/usr/local/bin/opencode", "console", "logout", email))
@@ -371,13 +382,17 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 Net.sseStop()
                 stopService(Intent(this@MainActivity, OpenCodeService::class.java))
-                Prefs.put(this@MainActivity, "uid", ""); Prefs.put(this@MainActivity, "email", ""); Prefs.put(this@MainActivity, "name", "")
+                // keep uid: chats/files stay on the phone, only the shown profile resets
+                Prefs.put(this@MainActivity, "email", ""); Prefs.put(this@MainActivity, "name", "")
                 lifecycleScope.launch {
                     try { CredentialManager.create(this@MainActivity).clearCredentialState(ClearCredentialStateRequest()) } catch (_: Exception) {}
                     emit("signedout", JSONObject())
                 }
             }
         }
+
+        /** Guarantees a data dir exists so the opencode login is never blocked. */
+        @JavascriptInterface fun guestProfile() { ensureUid() }
 
         @JavascriptInterface fun install() {
             thread {

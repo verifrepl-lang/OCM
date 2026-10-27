@@ -11,7 +11,7 @@ O.openSettings=()=>{
   const st=O.native.state(),fl=st.flags||{};
   const body=h('div');const s=sub('Настройки',body);
   body.append(h('div',{class:'card',style:{display:'flex',alignItems:'center',gap:'10px'}},O.icon('user'),h('div',{class:'grow'},h('b',null,st.name||'Гость'),h('div',{class:'mut s'},'Локальный профиль: '+(st.user||''))),
-    h('button',{class:'btn sm',style:{marginTop:'8px'},onclick:async()=>{if(await O.confirm('Сменить локальный профиль?','Текущие чаты останутся на телефоне и будут доступны после повторного входа с той же почтой.','Сменить'))OC.signOut()}},O.icon('out'),'Сменить профиль')));
+    h('button',{class:'btn sm',style:{marginTop:'8px'},onclick:async()=>{if(await O.confirm('Сменить аккаунт?','Чаты и файлы останутся на телефоне. Откроется экран входа opencode (Google/GitHub).','Выйти'))OC.signOut()}},O.icon('out'),'Сменить аккаунт')));
   const g=t=>body.append(h('div',{class:'grp'},t)),r=(i,t,sb,fn)=>body.append(O.listRow(i,t,sb,O.icon('chevR'),fn));
   g('Аккаунт opencode');
   const accRow=O.listRow('user','Аккаунт opencode','проверяем...',O.icon('chevR'),()=>O.openAccount());body.append(accRow);
@@ -135,7 +135,7 @@ O.on('signedout',()=>location.reload());
 
 // ---- аккаунт opencode: вход через Google/GitHub (device flow) ----
 O.consoleOrgs=async()=>{try{const r=await api('GET','/experimental/console/orgs',null,{timeout:10000});return r.orgs||[]}catch{return null}};
-O.openAccount=()=>{
+O.openAccount=(auto)=>{
   const body=h('div');const s=sub('Аккаунт opencode',body,{full:true,onClose:()=>{try{OC.authCancel()}catch{}}});
   let busy=false;
   const drawIdle=async()=>{body.textContent='';
@@ -185,7 +185,7 @@ O.openAccount=()=>{
           h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:drawIdle},'Назад'))}});
     try{OC.authLogin()}catch(e){fin=true;busy=false;box.textContent='';box.append(h('div',{class:'errbox'},e.message||'Не удалось запустить вход'))}
   };
-  drawIdle()};
+  if(auto)startLogin();else drawIdle()};
 O.on('authlogout',d=>{
   if(d.ok){O.toast('Вы вышли из аккаунта opencode. Перезапускаем сервер...',3500);try{OC.restartServer()}catch{}}
   else O.toast(d.error||'Не удалось выйти',4000)});
