@@ -106,7 +106,9 @@ object ZenModels {
         return arr
     }
 
-    /** Free model ids in fallback order (catalog free list, fallback appended). */
+    /** Free model ids for the fallback chain; shuffled so concurrent users
+     *  don't all hammer the same exhausted model. The user's own pick is
+     *  prepended by ZenClient.buildChain before this list. */
     fun live(activity: MainActivity): List<String> {
         val arr = list(activity)
         val free = mutableListOf<String>()
@@ -115,6 +117,7 @@ object ZenModels {
             if (o.getBoolean("free")) free.add(o.getString("id"))
         }
         for (id in FALLBACK_FREE) if (!free.contains(id)) free.add(id)
+        free.shuffle()
         return free
     }
 }
