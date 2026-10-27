@@ -187,6 +187,47 @@ object Runtime {
 
     // ---------- launch: proot -> opencode serve (1.x) ----------
 
+    /** Common proot invocation (same binds as the server) for a one-shot command like `opencode console login`. */
+    private fun prootBase(c: Context, uid: String): MutableList<String> {
+        val lib = c.applicationInfo.nativeLibraryDir
+        val home = home(c, uid)
+        val ptmp = File(c.filesDir, "proot-tmp").apply { mkdirs() }
+        val a = mutableListOf(
+            "$lib/libproot.so", "--kill-on-exit", "--link2symlink", "--sysvipc", "-0",
+            "-r", rootfs(c).path, "-w", "/root",
+            "-b", "/dev", "-b", "/proc", "-b", "/sys",
+            "-b", "/dev/urandom:/dev/random",
+            "-b", "/proc/self/fd:/dev/fd",
+            "-b", "/proc/self/fd/0:/dev/stdin",
+            "-b", "/proc/self/fd/1:/dev/stdout",
+            "-b", "/proc/self/fd/2:/dev/stderr",
+            "-b", "${home.path}:/root",
+        )
+        if (File("/storage/emulated/0").exists()) {
+            a += listOf("-b", "/storage/emulated/0:/storage/emulated/0", "-b", "/storage/emulated/0:/sdcard")
+        }
+        return a
+    }
+
+    /** Runs a short-lived command inside the proot env with merged piped output (for `opencode console login/logout`). */
+    fun prootCmd(c: Context, uid: String, cmd: List<String>): Process {
+        val lib = c.applicationInfo.nativeLibraryDir
+        val ptmp = File(c.filesDir, "proot-tmp").apply { mkdirs() }
+        val a = prootBase(c, uid) + cmd
+        val pb = ProcessBuilder(a).redirectErrorStream(true).directory(c.filesDir)
+        pb.environment().apply {
+            clear()
+            put("LD_LIBRARY_PATH", lib)
+            put("PROOT_LOADER", "$lib/libproot-loader.so")
+            put("PROOT_TMP_DIR", ptmp.path)
+            put("HOME", "/root"); put("USER", "root"); put("SHELL", "/bin/bash")
+            put("LANG", "C.UTF-8"); put("TERM", "dumb"); put("TMPDIR", "/tmp")
+            put("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+            put("OPENCODE_DISABLE_AUTOUPDATE", "1")
+        }
+        return pb.start()
+    }
+
     fun startServer(c: Context, uid: String, port: Int, password: String, noSeccomp: Boolean): Process {
         val lib = c.applicationInfo.nativeLibraryDir
         val root = rootfs(c)

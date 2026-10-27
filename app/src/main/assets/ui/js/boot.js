@@ -7,13 +7,13 @@ function login(msg){const st=O.native.state();let b,gb,em;
   const goEmail=()=>{const v=em.value.trim();if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)){O.toast('Введите корректный email');return}gb.disabled=true;OC.signInEmail(v)};
   const emailBox=h('div',{style:{width:'100%',display:'flex',gap:'6px'}},
     em=h('input',{type:'email',placeholder:'ваша@почта.ru',autocapitalize:'off',autocorrect:'off',style:{flex:1},onkeydown:e=>{if(e.key==='Enter')goEmail()}}),
-    gb=h('button',{class:'btn pri',onclick:goEmail},'Войти'));
-  screen(logo(),h('p',{class:'mut'},msg||'Войдите, чтобы открыть своё рабочее пространство.'),
+    gb=h('button',{class:'btn pri',onclick:goEmail},'Создать'));
+  screen(logo(),h('p',{class:'mut'},msg||'Укажите почту — она создаст ваш личный профиль на этом телефоне.'),
     st.googleConfigured?[
       h('div',{class:'note'},'У каждого аккаунта Google — свой отдельный профиль: чаты, файлы и ключи не пересекаются.'),
       b=h('button',{class:'btn pri wide',onclick:()=>{b.disabled=true;OC.signIn()}},O.icon('user'),'Войти через Google')]
     :[
-      h('div',{class:'note'},'У каждого email — свой личный профиль: свои чаты, файлы и ключи. Пароль не нужен, данные хранятся только на этом телефоне.'),
+      h('div',{class:'note'},'Почта нужна только для личного профиля на этом телефоне (чаты, файлы, ключи). Пароль не нужен, данные хранятся локально. Это не вход в opencode — после запуска войдите через Google/GitHub: Настройки → Аккаунт opencode.'),
       emailBox,
       h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:()=>{gb.disabled=true;OC.signIn()}},'Продолжить без почты (гость)')],
     st.user?h('button',{class:'btn wide',onclick:next},'Продолжить как '+(st.name||st.user)):null,h('span',{class:'mut s'},'v'+st.version))}

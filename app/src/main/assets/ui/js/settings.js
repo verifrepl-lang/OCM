@@ -10,9 +10,14 @@ const sub=(t,b,o)=>O.sheet(t,b,Object.assign({full:true},o));
 O.openSettings=()=>{
   const st=O.native.state(),fl=st.flags||{};
   const body=h('div');const s=sub('Настройки',body);
-  body.append(h('div',{class:'card',style:{display:'flex',alignItems:'center',gap:'10px'}},O.icon('user'),h('div',{class:'grow'},h('b',null,st.name||'Гость'),h('div',{class:'mut s'},st.user||'')),
-    h('button',{class:'btn sm',onclick:async()=>{if(await O.confirm('Выйти из аккаунта?','Чаты останутся на этом телефоне.','Выйти'))OC.signOut()}},O.icon('out'),'Выйти')));
+  body.append(h('div',{class:'card',style:{display:'flex',alignItems:'center',gap:'10px'}},O.icon('user'),h('div',{class:'grow'},h('b',null,st.name||'Гость'),h('div',{class:'mut s'},'Локальный профиль: '+(st.user||''))),
+    h('button',{class:'btn sm',style:{marginTop:'8px'},onclick:async()=>{if(await O.confirm('Сменить локальный профиль?','Текущие чаты останутся на телефоне и будут доступны после повторного входа с той же почтой.','Сменить'))OC.signOut()}},O.icon('out'),'Сменить профиль')));
   const g=t=>body.append(h('div',{class:'grp'},t)),r=(i,t,sb,fn)=>body.append(O.listRow(i,t,sb,O.icon('chevR'),fn));
+  g('Аккаунт opencode');
+  const accRow=O.listRow('user','Аккаунт opencode','проверяем...',O.icon('chevR'),()=>O.openAccount());body.append(accRow);
+  O.consoleOrgs().then(orgs=>{const sp=accRow.querySelector('.t span');if(!sp)return;
+    const em=orgs&&orgs.length?[...new Set(orgs.map(o=>o.accountEmail))][0]:null;
+    sp.textContent=em?('Вход выполнен: '+em):'Не выполнен — войдите через Google/GitHub'});
   g('Модели');r('key','Подключить провайдера','OpenCode Zen, OpenAI, Anthropic, GitHub Copilot, Google и другие',()=>O.openConnect());
   r('cpu','Модель',S.model?S.model.providerID+'/'+S.model.modelID:'не выбрана',()=>O.openModels());
   g('Оформление');r('palette','Тема и размер текста',({opencode:'OpenCode',light:'Светлая',tokyonight:'Tokyo Night',gruvbox:'Gruvbox'})[S.opts.theme]||S.opts.theme+', '+S.opts.fs+'px',()=>O.openThemes());
@@ -127,4 +132,61 @@ function openAbout(){const st=O.native.state();
     h('div',{class:'note'},'OpenCode Mobile упаковывает CLI OpenCode 1.x (лицензия MIT) в Android-приложение. Оно создано не командой OpenCode и никак с ней не связано.'),
     h('button',{class:'btn wide',style:{marginTop:'12px'},onclick:()=>O.openUrl('https://t.me/OpenCodeMob')},O.icon('tg'),'t.me/OpenCodeMob')))}
 O.on('signedout',()=>location.reload());
+
+// ---- аккаунт opencode: вход через Google/GitHub (device flow) ----
+O.consoleOrgs=async()=>{try{const r=await api('GET','/experimental/console/orgs',null,{timeout:10000});return r.orgs||[]}catch{return null}};
+O.openAccount=()=>{
+  const body=h('div');const s=sub('Аккаунт opencode',body,{full:true,onClose:()=>{try{OC.authCancel()}catch{}}});
+  let busy=false;
+  const drawIdle=async()=>{body.textContent='';
+    const orgs=await O.consoleOrgs();
+    if(orgs===null){
+      body.append(h('div',{class:'errbox'},'Не удалось связаться с сервером opencode. Убедитесь, что он запущен, и попробуйте ещё раз.'),
+        h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:()=>drawIdle()},O.icon('refresh'),'Повторить'));
+      return}
+    const emails=[...new Set(orgs.map(o=>o.accountEmail))];
+    if(!emails.length){
+      body.append(h('div',{class:'card',style:{display:'flex',alignItems:'center',gap:'10px'}},O.icon('user'),h('div',{class:'grow'},h('b',null,'Вход не выполнен'),h('div',{class:'mut s'},'Сейчас квота OpenCode Zen анонимная и быстро исчерпывается'))));
+      body.append(h('div',{class:'note'},'Войдите через Google или GitHub — как в opencode на компьютере. Откроется страница opencode.ai: выберите Google или GitHub и подтвердите вход. После этого квота Zen привяжется к вашему аккаунту.'));
+      body.append(h('button',{class:'btn pri wide',style:{marginTop:'8px'},onclick:startLogin},O.icon('user'),'Войти через Google / GitHub'));
+      body.append(h('div',{class:'mut s',style:{marginTop:'10px'}},'Альтернатива — свой ключ провайдера: Настройки → Модели → Подключить провайдера.'));
+      return}
+    emails.forEach(e=>body.append(O.listRow('user',e,'Аккаунт opencode',O.icon('check','ok'),null)));
+    const act=orgs.find(o=>o.active);
+    if(act)body.append(O.listRow('key',act.orgName,'Активная организация',null,null));
+    body.append(h('div',{class:'note'},'Вход выполнен: квота OpenCode Zen привязана к вашему аккаунту. Если ошибка квоты ещё появляется — перезапустите сервер и подождите минуту.'));
+    emails.forEach(e=>body.append(h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:async()=>{
+      if(!await O.confirm('Выйти из аккаунта opencode?','Квота Zen снова станет анонимной. Локальные чаты не удалятся.','Выйти',true))return;
+      busy=true;O.toast('Выходим из аккаунта...');OC.authLogout(e)}},O.icon('out'),'Выйти из '+e)));
+  };
+  const startLogin=()=>{if(busy)return;busy=true;body.textContent='';
+    const box=h('div',null,h('div',{style:{display:'flex',gap:'8px',alignItems:'center',padding:'6px 0'}},h('span',{class:'spin'}),h('span',{class:'mut'},'Готовим код входа... Это займёт несколько секунд')));
+    body.append(box);
+    let url=null,code=null,fin=false;
+    const cancel=()=>{if(!fin){fin=true;busy=false;try{OC.authCancel()}catch{};drawIdle()}};
+    O.on('authlogin',d=>{if(!box.isConnected)return;
+      if(d.stage==='url'){url=d.url;code=d.code;
+        box.textContent='';
+        box.append(h('div',{class:'note'},'Открываем страницу opencode.ai. На ней нажмите «Continue with Google» или «Continue with GitHub» и подтвердите разрешение — код уже вписан автоматически.'),
+          h('div',{class:'card',style:{textAlign:'center',padding:'14px',marginTop:'10px'}},h('div',{class:'mut s'},'Код входа (если понадобится вручную)'),h('b',{class:'mono',style:{fontSize:'22px',letterSpacing:'2px'}},code),h('button',{class:'btn sm',style:{marginTop:'8px'},onclick:()=>O.native.copy(code)},O.icon('copy'),'Скопировать код')),
+          h('button',{class:'btn pri wide',style:{marginTop:'10px'},onclick:()=>O.openUrl(url)},O.icon('ext'),'Открыть страницу входа ещё раз'),
+          h('div',{style:{display:'flex',gap:'8px',alignItems:'center',margin:'14px 0'}},h('span',{class:'spin'}),h('span',{class:'mut'},'Ожидаем подтверждение в браузере...')),
+          h('button',{class:'btn wide',onclick:cancel},'Отменить вход'));
+        O.openUrl(url);
+      }else if(d.stage==='done'){fin=true;busy=false;
+        box.textContent='';
+        box.append(h('div',{class:'card',style:{display:'flex',alignItems:'center',gap:'10px'}},O.icon('check'),h('div',{class:'grow'},h('b',null,'Вошли как '+d.email),h('div',{class:'mut s'},'Перезапускаем сервер, чтобы применить аккаунт...'))));
+        O.toast('Вошли как '+d.email,4000);
+        setTimeout(()=>{s.close();OC.restartServer();O.toast('Перезапуск сервера...')},1500);
+      }else if(d.stage==='error'){fin=true;busy=false;
+        box.textContent='';
+        box.append(h('div',{class:'errbox'},d.error||'Не удалось войти'),
+          h('button',{class:'btn wide',style:{marginTop:'10px'},onclick:startLogin},O.icon('refresh'),'Повторить вход'),
+          h('button',{class:'btn wide',style:{marginTop:'8px'},onclick:drawIdle},'Назад'))}});
+    try{OC.authLogin()}catch(e){fin=true;busy=false;box.textContent='';box.append(h('div',{class:'errbox'},e.message||'Не удалось запустить вход'))}
+  };
+  drawIdle()};
+O.on('authlogout',d=>{
+  if(d.ok){O.toast('Вы вышли из аккаунта opencode. Перезапускаем сервер...',3500);try{OC.restartServer()}catch{}}
+  else O.toast(d.error||'Не удалось выйти',4000)});
 })();

@@ -36,7 +36,7 @@ O.chatInit=root=>{
   bus.on('sessions',()=>{renderRevert()});
   bus.on('meta',updateChips);bus.on('conn',updateChips);
   bus.on('serror',p=>{if(p&&(!p.sessionID||p.sessionID===S.sid)){const e=p.error;const t=e&&(e.data&&e.data.message||e.name);if(t&&e.name!=='MessageAbortedError'){
-    if(/quota|rate.?limit|insufficient|exceeded|credit|\b429\b/i.test(String(t)))O.toast('Квота исчерпана. Подключите своего провайдера: Настройки → Модели → Подключить провайдера',6000);
+    if(/quota|rate.?limit|insufficient|exceeded|credit|\b429\b/i.test(String(t)))O.toast('Квота исчерпана. Войдите в аккаунт opencode (Google/GitHub): Настройки → Аккаунт opencode — или подключите свой ключ: Настройки → Модели → Подключить провайдера',8000);
     else O.toast(t,4000)}}});
   updateChips();renderAll();
 };
@@ -106,7 +106,7 @@ function metaUpdate(el,m){
     meta.append(h('span',null,t.join('  ')));
     if(i.error&&i.error.name!=='MessageAbortedError'){const old=el.firstChild.querySelector('.errbox');if(old)old.remove();
       let em=(i.error.data&&i.error.data.message)||i.error.name||'Ошибка';
-      if(/quota|rate.?limit|insufficient|exceeded|credit|\b429\b/i.test(String(em)))em+='\n\nПодключите своего провайдера с ключом: Настройки → Модели → Подключить провайдера';
+      if(/quota|rate.?limit|insufficient|exceeded|credit|\b429\b/i.test(String(em)))em+='\n\nВойдите в аккаунт opencode через Google или GitHub (Настройки → Аккаунт opencode) — квота Zen станет персональной. Или подключите свой ключ: Настройки → Модели → Подключить провайдера';
       el.firstChild.append(h('div',{class:'errbox'},em))}
     else if(i.error)meta.append(h('span',{class:'warn'},'прервано'))}
   meta.append(h('span',{class:'grow'}),h('button',{class:'ibtn s',onclick:()=>msgActions(m)},O.icon('dots')))}

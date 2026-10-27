@@ -148,6 +148,105 @@ class MainActivity : ComponentActivity() {
 
     private fun uid() = Prefs.get(this, "uid")
 
+    // ---------- opencode account login (device flow via `opencode console login`) ----------
+
+    private val ansiRe = Regex("\u001B\\[[0-9;?]*[ -/]*[@-~]|\u001B\\][^\u0007\u001B]*(\u0007|\u001B\\\\)|[\u001B\u0000-\u0008\u000B\u000C\u000E-\u001F]")
+    @Volatile private var loginProc: Process? = null
+
+    private fun authEmit(o: JSONObject) = emit("authlogin", o)
+
+    /** Starts `opencode console login` inside proot and streams the device-flow URL/code to the UI. */
+    private fun doAuthLogin() {
+        if (loginProc != null) return authEmit(JSONObject().put("stage", "error").put("error", "Вход уже выполняется"))
+        val u = uid()
+        if (u.isEmpty()) return authEmit(JSONObject().put("stage", "error").put("error", "Сначала войдите в профиль"))
+        if (!Runtime.isInstalled(this)) return authEmit(JSONObject().put("stage", "error").put("error", "Linux-окружение ещё не установлено"))
+        thread {
+            var url: String? = null
+            var code: String? = null
+            var sentUrl = false
+            var doneEmail: String? = null
+            var failMsg: String? = null
+            val tail = java.util.ArrayDeque<String>()
+            try {
+                val p = Runtime.prootCmd(this, listOf("/usr/local/bin/opencode", "console", "login"))
+                loginProc = p
+                java.io.BufferedReader(java.io.InputStreamReader(p.inputStream, Charsets.UTF_8)).use { r ->
+                    while (true) {
+                        val raw = r.readLine() ?: break
+                        val line = ansiRe.replace(raw, "")
+                        if (tail.size >= 12) tail.poll()
+                        tail.add(line)
+                        if (url == null) {
+                            val m = Regex("Go to:\\s*(https?://\\S+)").find(line)
+                                ?: Regex("(https?://opencode\\.ai/\\S*[?&#][A-Za-z_]*code=[A-Za-z0-9_-]+)").find(line)
+                            m?.let { url = it.groupValues[1] }
+                        }
+                        if (code == null) {
+                            val m = Regex("Enter code:\\s*([A-Za-z0-9_-]+)").find(line)
+                            val uq = url
+                            val m2 = if (m == null && uq != null) Regex("[?&#](?:user_)?code=([A-Za-z0-9_-]+)").find(uq) else null
+                            (m ?: m2)?.let { code = it.groupValues[1] }
+                        }
+                        val u1 = url; val c1 = code
+                        if (!sentUrl && u1 != null && c1 != null) {
+                            sentUrl = true
+                            authEmit(JSONObject().put("stage", "url").put("url", u1).put("code", c1))
+                        }
+                        if (doneEmail == null) Regex("Logged in as\\s+(\\S+)").find(line)?.let { doneEmail = it.groupValues[1] }
+                        if (failMsg == null) {
+                            if (line.contains("Device code expired")) failMsg = "Код входа истёк. Попробуйте ещё раз"
+                            else if (line.contains("Authorization denied")) failMsg = "Вход отклонён"
+                            else Regex("Error:\\s*(.{3,})").find(line)?.let { failMsg = it.groupValues[1].trim() }
+                        }
+                    }
+                }
+                // wait for the CLI to finish writing the account db before restarting the server
+                val fin = p.waitFor()
+                val em = doneEmail; val fm = failMsg
+                if (em != null) {
+                    authEmit(JSONObject().put("stage", "done").put("email", em))
+                } else if (fm != null) {
+                    authEmit(JSONObject().put("stage", "error").put("error", fm))
+                } else if (fin != 0) {
+                    authEmit(JSONObject().put("stage", "error").put("error", "opencode вернул код $fin: " + tail.joinToString(" / ").take(300)))
+                } else {
+                    authEmit(JSONObject().put("stage", "error").put("error", "Вход прерван"))
+                }
+            } catch (e: Exception) {
+                authEmit(JSONObject().put("stage", "error").put("error", e.message ?: "Не удалось запустить вход"))
+            } finally {
+                loginProc = null
+            }
+        }
+    }
+
+    /** Runs `opencode console logout <email>` (quick, non-interactive with an explicit email). */
+    private fun doAuthLogout(email: String) {
+        val u = uid()
+        if (u.isEmpty() || !Runtime.isInstalled(this)) return emit("authlogout", JSONObject().put("ok", false).put("error", "Окружение не готово"))
+        thread {
+            try {
+                val p = Runtime.prootCmd(this, listOf("/usr/local/bin/opencode", "console", "logout", email))
+                val out = StringBuilder()
+                java.io.BufferedReader(java.io.InputStreamReader(p.inputStream, Charsets.UTF_8)).use { r ->
+                    while (true) {
+                        val l = r.readLine() ?: break
+                        out.append(ansiRe.replace(l, "")).append('\n')
+                    }
+                }
+                val fin = p.waitFor()
+                val text = out.toString()
+                val ok = fin == 0 && !text.contains("Not logged in") && !text.contains("Account not found")
+                val e = if (ok) null else if (text.contains("Account not found")) "Аккаунт не найден" else if (text.contains("Not logged in")) "Вход не выполнен" else "opencode вернул код $fin"
+                emit("authlogout", if (ok) JSONObject().put("ok", true) else JSONObject().put("ok", false).put("error", e ?: "Ошибка выхода"))
+            } catch (e: Exception) {
+                emit("authlogout", JSONObject().put("ok", false).put("error", e.message ?: "Ошибка выхода"))
+            }
+        }
+    }
+
+
     private fun perms() = JSONObject().apply {
         put("notifications", Build.VERSION.SDK_INT < 33 ||
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
@@ -243,6 +342,16 @@ class MainActivity : ComponentActivity() {
 
         // --- account / lifecycle ---
         @JavascriptInterface fun signIn() { runOnUiThread { doSignIn() } }
+
+        /** Настоящий вход в аккаунт opencode (Google/GitHub) — device flow через `opencode console login`. */
+        @JavascriptInterface fun authLogin() { runOnUiThread { doAuthLogin() } }
+
+        @JavascriptInterface fun authCancel() {
+            try { loginProc?.destroy() } catch (_: Exception) {}
+        }
+
+        /** Выход из аккаунта opencode: `opencode console logout <email>`. */
+        @JavascriptInterface fun authLogout(email: String) { runOnUiThread { doAuthLogout(email) } }
 
         /** Вход по email без Google: uid = SHA-256(email), как и для Google-аккаунтов. У каждого email — свой изолированный профиль. */
         @JavascriptInterface fun signInEmail(email: String) {
