@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 env:
-  VERSION_NAME: "1.0.11"
+  VERSION_NAME: "1.1.0"
 
 jobs:
   build:
@@ -21,6 +21,7 @@ jobs:
       - uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
+        continue-on-error: true
 
       - uses: actions/setup-java@v4
         with:
@@ -47,14 +48,7 @@ jobs:
         with:
           gradle-version: "8.10.2"
 
-      - name: Runtime (proot + Linux rootfs + opencode 1.x)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bash scripts/build-runtime.sh
-
-      - name: UI assets (libraries and file icons)
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: UI assets (markdown, sanitizer, highlighter)
         run: bash scripts/fetch-ui-deps.sh
 
       - name: Signing key
@@ -70,21 +64,22 @@ jobs:
               -keystore keystore/release.jks -storepass "$PASS" -keypass "$PASS" \
               -dname "CN=OpenCode Mobile, O=OpenCodeMob, C=RU"
           fi
-          echo "Register this SHA-1 in the Google Cloud Android OAuth client:"
-          keytool -list -v -keystore keystore/release.jks -storepass "$PASS" | grep -E "SHA1:"
 
       - name: Build APK
         env:
-          GOOGLE_WEB_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
           CODE=$((GITHUB_RUN_NUMBER + 100))
           gradle :app:assembleRelease --no-daemon -PappVersionName="$VERSION_NAME" -PappVersionCode="$CODE"
           cp app/build/outputs/apk/release/app-release.apk "OpenCode-${VERSION_NAME}-${CODE}.apk"
           {
-            echo "OpenCode Mobile ${VERSION_NAME}"
+            echo "OpenCode Mobile ${VERSION_NAME} — Zen Direct"
             echo
-            echo "Core: opencode $(grep opencode_core runtime-info.txt | cut -d= -f2) (1.x line)"
+            echo "Полностью переработанная архитектура:"
+            echo "- Без rootfs, proot и локального CLI: приложение говорит с opencode.ai напрямую (протокол /inference, анонимный бесплатный доступ Bearer public)"
+            echo "- Автоматический фолбэк по бесплатным моделям при исчерпании лимита (HTTP 429)"
+            echo "- APK легче на порядок: никаких 636 МБ загрузки при первом запуске"
+            echo "- Опциональный ключ opencode Zen в настройках снимает лимиты IP"
             echo
             echo "Telegram: https://t.me/OpenCodeMob"
           } > notes.md
