@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.database.sqlite.SQLiteDatabase
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -216,7 +217,10 @@ class MainActivity : ComponentActivity() {
                 val fin = p.waitFor()
                 val em = doneEmail; val fm = failMsg
                 if (em != null) {
-                    authEmit(JSONObject().put("stage", "done").put("email", em))
+                    // mirror the console account into the Zen credential store BEFORE the restart,
+                    // otherwise the provider stays anonymous and every model hits the IP quota
+                    val synced = syncZenCredential(this@MainActivity, u, em)
+                    authEmit(JSONObject().put("stage", "done").put("email", em).put("synced", synced))
                 } else if (fm != null) {
                     authEmit(JSONObject().put("stage", "error").put("error", fm))
                 } else if (fin != 0) {
@@ -230,6 +234,76 @@ class MainActivity : ComponentActivity() {
                 loginProc = null
             }
         }
+    }
+
+    /**
+     * opencode 1.x: `console login` stores the account in opencode.db (tables `account` +
+     * `account_state`), but the OpenCode Zen provider only becomes non-anonymous when the
+     * integration store (`credential` table, integration_id='opencode') holds the OAuth token.
+     * The CLI does not bridge the two on this version, so after login the provider stays
+     * anonymous and every model reports "Free usage limit reached". We mirror the account
+     * into a credential row — exactly what the integration system would have stored.
+     */
+    private fun syncZenCredential(c: Context, uid: String, email: String): Boolean {
+        val db = File(Runtime.home(c, uid), ".local/share/opencode/opencode.db")
+        if (!db.exists()) return false
+        return try {
+            SQLiteDatabase.openDatabase(db.path, null, SQLiteDatabase.OPEN_READWRITE).use { sq ->
+                val row = sq.rawQuery(
+                    "SELECT id,url,access_token,refresh_token,token_expiry FROM account WHERE email=? ORDER BY time_updated DESC LIMIT 1",
+                    arrayOf(email)
+                ).use { r ->
+                    if (r.moveToFirst()) listOf(
+                        r.getString(0), r.getString(1), r.getString(2), r.getString(3),
+                        if (r.isNull(4)) null else r.getLong(4)
+                    ) else null
+                } ?: return false
+                val accId = row[0] as? String ?: return false
+                val url = row[1] as? String
+                val access = row[2] as? String ?: return false
+                val refresh = row[3] as? String ?: return false
+                val expiry = row[4] as? Long
+                val mirrored = sq.rawQuery("SELECT value FROM credential WHERE integration_id='opencode'", null).use { r ->
+                    while (r.moveToNext()) {
+                        val v = r.getString(0) ?: continue
+                        if (v.contains("\"access\":\"$access\"") && v.contains("\"refresh\":\"$refresh\"")) return@use true
+                    }
+                    false
+                }
+                if (mirrored) return true
+                val now = System.currentTimeMillis()
+                val meta = JSONObject()
+                    .put("server", if (url.isNullOrEmpty()) "https://opencode.ai/console" else url)
+                    .put("accountID", accId).put("email", email)
+                val value = JSONObject()
+                    .put("type", "oauth").put("methodID", "device")
+                    .put("access", access).put("refresh", refresh)
+                    .put("expires", expiry ?: (now + 3_600_000L))
+                    .put("metadata", meta)
+                sq.beginTransaction()
+                try {
+                    sq.execSQL("DELETE FROM credential WHERE integration_id='opencode'")
+                    sq.execSQL(
+                        "INSERT INTO credential (id,integration_id,label,value,connector_id,method_id,active,time_created,time_updated) VALUES (?,?,?,?,?,?,?,?,?)",
+                        arrayOf<Any>("cred_" + java.lang.Long.toString(now, 36) + (100..999).random(), "opencode", email, value.toString(), "opencode", "device", 1, now, now)
+                    )
+                    sq.setTransactionSuccessful()
+                } finally { sq.endTransaction() }
+                true
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** Removes the mirrored Zen credential when the user logs out of the opencode account. */
+    private fun dropZenCredential(c: Context, uid: String) {
+        val db = File(Runtime.home(c, uid), ".local/share/opencode/opencode.db")
+        if (!db.exists()) return
+        try {
+            val sq = SQLiteDatabase.openDatabase(db.path, null, SQLiteDatabase.OPEN_READWRITE)
+            try { sq.execSQL("DELETE FROM credential WHERE integration_id='opencode'") } finally { sq.close() }
+        } catch (_: Exception) {}
     }
 
     /** Runs `opencode console logout <email>` (quick, non-interactive with an explicit email). */
@@ -250,6 +324,7 @@ class MainActivity : ComponentActivity() {
                 val text = out.toString()
                 val ok = fin == 0 && !text.contains("Not logged in") && !text.contains("Account not found")
                 val e = if (ok) null else if (text.contains("Account not found")) "Аккаунт не найден" else if (text.contains("Not logged in")) "Вход не выполнен" else "opencode вернул код $fin"
+                if (ok) dropZenCredential(this@MainActivity, u)
                 emit("authlogout", if (ok) JSONObject().put("ok", true) else JSONObject().put("ok", false).put("error", e ?: "Ошибка выхода"))
             } catch (e: Exception) {
                 emit("authlogout", JSONObject().put("ok", false).put("error", e.message ?: "Ошибка выхода"))

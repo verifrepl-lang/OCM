@@ -59,7 +59,12 @@ O.onServerEvent=raw=>{let o;try{o=JSON.parse(raw)}catch{return}
   case'pty.exited':case'pty.deleted':bus.emit('pty',p);break}};
 const normPerm=p=>({id:p.id,sessionID:p.sessionID,title:p.title||p.permission||p.type||'Разрешение',patterns:[].concat(p.patterns||p.pattern||[]),metadata:p.metadata||{},tool:p.tool,raw:p});
 
-O.on('sse',d=>{if(d.t==='data')O.onServerEvent(d.d);else if(d.t==='open'){S.up=true;bus.emit('conn')}else if(d.t==='close'){S.up=false;bus.emit('conn')}});
+// Brief SSE drops (app frozen in background for a second) must not flash the reconnect banner:
+// delay it, cancel when the stream comes back.
+let upT=null;
+O.on('sse',d=>{if(d.t==='data')O.onServerEvent(d.d);else if(d.t==='open'){if(upT){clearTimeout(upT);upT=null}S.up=true;bus.emit('conn')}
+  else if(d.t==='close'){S.up=false;if(!upT)upT=setTimeout(()=>{upT=null;if(!S.up)bus.emit('conn')},5000)}});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!S.up){try{OC.sseStart()}catch(e){}}});
 
 // ---- loaders (network first, IndexedDB fallback) ----
 O.loadMeta=async()=>{

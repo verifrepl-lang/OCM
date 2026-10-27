@@ -176,6 +176,7 @@ O.openAccount=(auto)=>{
       }else if(d.stage==='done'){fin=true;busy=false;
         box.textContent='';
         box.append(h('div',{class:'card',style:{display:'flex',alignItems:'center',gap:'10px'}},O.icon('check'),h('div',{class:'grow'},h('b',null,'Вошли как '+d.email),h('div',{class:'mut s'},'Перезапускаем сервер, чтобы применить аккаунт...'))));
+        if(d.synced===false)box.append(h('div',{class:'errbox',style:{marginTop:'10px'}},'Аккаунт сохранён, но автоматически привязать его к моделям не удалось. После перезапуска откройте Настройки → Аккаунт opencode и проверьте статус входа.'));
         O.toast('Вошли как '+d.email,4000);
         setTimeout(()=>{s.close();OC.restartServer();O.toast('Перезапуск сервера...')},1500);
       }else if(d.stage==='error'){fin=true;busy=false;
